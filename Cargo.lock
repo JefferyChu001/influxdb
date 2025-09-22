@@ -3330,6 +3330,7 @@ dependencies = [
  "influxdb3_id",
  "influxdb3_shutdown",
  "influxdb3_types",
+ "influxdb3_wal",
  "iox_time",
  "metric",
  "observability_deps",

@@ -31,6 +31,7 @@ uuid.workspace = true
 influxdb3_id.workspace = true
 influxdb3_shutdown.workspace = true
 influxdb3_types.workspace = true
+influxdb3_wal.workspace = true
 iox_time.workspace = true
 metric.workspace = true
 

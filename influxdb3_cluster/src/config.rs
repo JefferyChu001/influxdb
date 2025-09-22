@@ -1,6 +1,7 @@
 //! Cluster configuration types and defaults
 
 use crate::{NodeId, Result};
+use crate::write_coordinator::ConsistencyLevel;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -34,7 +35,10 @@ pub struct ClusterConfig {
     
     /// Replication factor for data
     pub replication_factor: usize,
-    
+
+    /// Consistency level for writes
+    pub consistency_level: ConsistencyLevel,
+
     /// Timeout for cluster operations
     pub operation_timeout: Duration,
 }
@@ -51,6 +55,7 @@ impl Default for ClusterConfig {
             raft: RaftConfig::default(),
             enable_raft: true,
             replication_factor: 3,
+            consistency_level: ConsistencyLevel::default(),
             operation_timeout: Duration::from_secs(30),
         }
     }

@@ -42,6 +42,7 @@ pub mod membership;
 pub mod node;
 pub mod partition;
 pub mod raft;
+pub mod write_coordinator;
 
 #[cfg(test)]
 mod tests;

@@ -166,6 +166,7 @@ influxdb3_cluster = { path = "influxdb3_cluster" }
 influxdb3_id = { path = "influxdb3_id" }
 influxdb3_shutdown = { path = "influxdb3_shutdown" }
 influxdb3_types = { path = "influxdb3_types" }
+influxdb3_wal = { path = "influxdb3_wal" }
 
 # Core.git crates we depend on
 arrow_util = { git = "https://github.com/influxdata/influxdb3_core", rev = "f1bc15655d50e07e2cb4d7a52acf5b1d24ff6516" }
