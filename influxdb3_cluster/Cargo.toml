@@ -1,0 +1,40 @@
+[package]
+name = "influxdb3_cluster"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+dashmap.workspace = true
+futures.workspace = true
+hashbrown.workspace = true
+hyper.workspace = true
+indexmap.workspace = true
+observability_deps.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+# Core dependencies
+influxdb3_id.workspace = true
+influxdb3_shutdown.workspace = true
+influxdb3_types.workspace = true
+iox_time.workspace = true
+metric.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+test-log.workspace = true
+tokio-test = "0.4"

@@ -3316,6 +3316,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "influxdb3_cluster"
+version = "3.5.0-nightly"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "dashmap",
+ "futures",
+ "hashbrown 0.15.5",
+ "hyper 1.7.0",
+ "indexmap 2.11.4",
+ "influxdb3_id",
+ "influxdb3_shutdown",
+ "influxdb3_types",
+ "iox_time",
+ "metric",
+ "observability_deps",
+ "parking_lot",
+ "rand 0.8.5",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2",
+ "tempfile",
+ "test-log",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "influxdb3_id"
 version = "3.5.0-nightly"
 dependencies = [
@@ -7066,6 +7100,19 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "tokio-test"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2468baabc3311435b55dd935f702f42cd1b8abb7e754fb7dfb16bd36aa88f9f7"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
