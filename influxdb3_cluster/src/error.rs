@@ -59,6 +59,10 @@ pub enum ClusterError {
     /// Generic error
     #[error("cluster error: {0}")]
     Generic(String),
+
+    /// No available nodes for query execution
+    #[error("no available nodes for query execution")]
+    NoAvailableNodes,
 }
 
 /// Network-related errors

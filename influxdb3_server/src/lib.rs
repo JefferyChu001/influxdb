@@ -1816,6 +1816,7 @@ mod tests {
             Arc::clone(&processing_engine),
             usize::MAX,
             Arc::clone(&authorizer) as _,
+            None, // No cluster manager in single-node mode
         ));
 
         let server = Server::new(CreateServerArgs {

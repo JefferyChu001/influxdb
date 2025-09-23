@@ -36,6 +36,7 @@
 pub mod config;
 pub mod discovery;
 pub mod distributed_write_buffer;
+pub mod distributed_query_coordinator;
 pub mod error;
 pub mod gossip;
 pub mod health;
@@ -54,9 +55,14 @@ mod tests;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use observability_deps::tracing::info;
 
 pub use config::ClusterConfig;
 pub use distributed_write_buffer::DistributedWriteBuffer;
+pub use distributed_query_coordinator::{
+    DistributedQueryCoordinator, DistributedQuery, DistributedQueryResult,
+    QueryStrategy, ConsistencyLevel, NodeQueryResult, QueryStats
+};
 pub use error::{ClusterError, Result};
 pub use node::{Node, NodeId, NodeState, NodeStatus};
 
@@ -69,6 +75,7 @@ pub struct ClusterManager {
     health: Arc<health::HealthMonitor>,
     partition: Arc<partition::PartitionManager>,
     raft: Option<Arc<raft::RaftConsensus>>,
+    query_coordinator: Arc<distributed_query_coordinator::DistributedQueryCoordinator>,
 }
 
 impl ClusterManager {
@@ -109,7 +116,11 @@ impl ClusterManager {
         } else {
             None
         };
-        
+
+        let query_coordinator = Arc::new(
+            distributed_query_coordinator::DistributedQueryCoordinator::new(None)
+        );
+
         Ok(Self {
             config,
             membership,
@@ -117,6 +128,7 @@ impl ClusterManager {
             health,
             partition,
             raft,
+            query_coordinator,
         })
     }
     
@@ -138,7 +150,10 @@ impl ClusterManager {
         
         // Join the cluster by connecting to seed nodes
         self.join_cluster().await?;
-        
+
+        // Update query coordinator with initial node list
+        self.update_query_coordinator_nodes().await?;
+
         Ok(())
     }
     
@@ -150,6 +165,11 @@ impl ClusterManager {
     /// Get the membership manager
     pub fn membership_manager(&self) -> Arc<RwLock<membership::MembershipManager>> {
         Arc::clone(&self.membership)
+    }
+
+    /// Get the distributed query coordinator
+    pub fn query_coordinator(&self) -> Arc<distributed_query_coordinator::DistributedQueryCoordinator> {
+        Arc::clone(&self.query_coordinator)
     }
 
     /// Stop the cluster manager and all its components
@@ -215,6 +235,63 @@ impl ClusterManager {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// Update query coordinator with current node endpoints
+    async fn update_query_coordinator_nodes(&self) -> Result<()> {
+        let membership = self.membership.read().await;
+        let active_nodes = membership.get_active_nodes();
+
+        info!(
+            current_node = %self.config.node_id,
+            active_node_count = active_nodes.len(),
+            "Updating query coordinator with cluster nodes"
+        );
+
+        let mut node_endpoints = std::collections::HashMap::new();
+
+        // Add current node
+        let current_endpoint = if self.config.bind_addr.port() == 8191 {
+            "http://127.0.0.1:8181".to_string()
+        } else {
+            "http://127.0.0.1:8182".to_string()
+        };
+        node_endpoints.insert(self.config.node_id.clone(), current_endpoint.clone());
+
+        info!(
+            node_id = %self.config.node_id,
+            endpoint = %current_endpoint,
+            "Added current node to query coordinator"
+        );
+
+        // Add other active nodes (assuming they use HTTP on port 8181/8182)
+        for node in active_nodes {
+            if node.id != self.config.node_id {
+                // For now, we'll construct endpoints based on known patterns
+                // In a real implementation, this would come from service discovery
+                let endpoint = if node.id.to_string().contains("node2") {
+                    "http://127.0.0.1:8182".to_string()
+                } else {
+                    "http://127.0.0.1:8181".to_string()
+                };
+                node_endpoints.insert(node.id.clone(), endpoint.clone());
+
+                info!(
+                    node_id = %node.id,
+                    endpoint = %endpoint,
+                    "Added cluster node to query coordinator"
+                );
+            }
+        }
+
+        info!(
+            total_endpoints = node_endpoints.len(),
+            endpoints = ?node_endpoints,
+            "Updating query coordinator with all endpoints"
+        );
+
+        self.query_coordinator.update_nodes(node_endpoints).await;
         Ok(())
     }
 }

@@ -248,6 +248,9 @@ pub enum Error {
     #[error("Processing engine error: {0}")]
     ProcessingEngine(#[from] influxdb3_processing_engine::manager::ProcessingEngineError),
 
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+
     #[error(transparent)]
     Influxdb3TypesHttp(#[from] influxdb3_types::http::Error),
 
@@ -723,6 +726,7 @@ pub struct HttpApi {
     max_request_bytes: usize,
     authorizer: Arc<dyn AuthProvider>,
     legacy_write_param_unifier: SingleTenantRequestUnifier,
+    cluster_manager: Option<Arc<influxdb3_cluster::ClusterManager>>,
 }
 
 /// Wrapper for HttpApi used by the recovery endpoint that includes a shutdown token
@@ -752,6 +756,7 @@ impl HttpApi {
         processing_engine: Arc<ProcessingEngineManagerImpl>,
         max_request_bytes: usize,
         authorizer: Arc<dyn AuthProvider>,
+        cluster_manager: Option<Arc<influxdb3_cluster::ClusterManager>>,
     ) -> Self {
         // there is a global authentication setup, passing in auth provider just does the same
         // check twice. So, instead we pass in a NoAuthAuthenticator to avoid authenticating twice.
@@ -766,6 +771,7 @@ impl HttpApi {
             authorizer,
             legacy_write_param_unifier,
             processing_engine,
+            cluster_manager,
         }
     }
 }
@@ -887,6 +893,109 @@ impl HttpApi {
         let stream = self
             .query_executor
             .query_sql(&database, &query_str, params, span_ctx, None)
+            .await?;
+
+        ResponseBuilder::new()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, format.as_content_type())
+            .body(record_batch_stream_to_body(stream, format).await?)
+            .map_err(Into::into)
+    }
+
+    async fn query_distributed(&self, req: Request) -> Result<Response> {
+        use influxdb3_cluster::{DistributedQuery, QueryStrategy, ConsistencyLevel};
+        use std::time::Duration;
+
+        let QueryRequest {
+            database,
+            query_str,
+            format,
+            params: _,
+        } = self.extract_query_request::<String>(req).await?;
+
+        info!(%database, %query_str, ?format, "handling distributed query");
+
+        // Check if cluster mode is enabled
+        let cluster_manager = match &self.cluster_manager {
+            Some(cm) => cm,
+            None => {
+                // Fall back to local query if no cluster manager
+                return self.query_sql_local(&database, &query_str, format).await;
+            }
+        };
+
+        // Create distributed query
+        let distributed_query = DistributedQuery {
+            query_id: uuid::Uuid::new_v4().to_string(),
+            database,
+            sql: query_str,
+            strategy: QueryStrategy::Scatter, // Query all nodes
+            timeout: Duration::from_secs(30),
+            consistency_level: ConsistencyLevel::Any, // Accept results from any available node
+        };
+
+        // Execute distributed query
+        let query_coordinator = cluster_manager.query_coordinator();
+        match query_coordinator.execute_query(distributed_query).await {
+            Ok(result) => {
+                info!(
+                    query_id = %result.query_id,
+                    success = result.success,
+                    total_rows = result.total_rows,
+                    nodes_queried = result.nodes_queried,
+                    nodes_succeeded = result.nodes_succeeded,
+                    execution_time_ms = result.total_execution_time_ms,
+                    "Distributed query completed"
+                );
+
+                if result.success {
+                    // Convert the aggregated JSON result to the requested format
+                    let response_body = match format {
+                        QueryFormat::Json => {
+                            serde_json::to_string(&result.data)
+                                .map_err(|e| Error::Serialization(e.to_string()))?
+                        }
+                        QueryFormat::Pretty => {
+                            serde_json::to_string_pretty(&result.data)
+                                .map_err(|e| Error::Serialization(e.to_string()))?
+                        }
+                        _ => {
+                            // For other formats, we'd need to convert JSON back to RecordBatch
+                            // For now, return JSON
+                            serde_json::to_string(&result.data)
+                                .map_err(|e| Error::Serialization(e.to_string()))?
+                        }
+                    };
+
+                    ResponseBuilder::new()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, format.as_content_type())
+                        .body(bytes_to_response_body(response_body))
+                        .map_err(Into::into)
+                } else {
+                    // Return error if query failed
+                    let error_msg = format!(
+                        "Distributed query failed: {}/{} nodes succeeded",
+                        result.nodes_succeeded, result.nodes_queried
+                    );
+                    Err(Error::Serialization(error_msg))
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Distributed query execution failed");
+                Err(Error::Serialization(format!("Distributed query failed: {}", e)))
+            }
+        }
+    }
+
+    async fn query_sql_local(&self, database: &str, query_str: &str, format: QueryFormat) -> Result<Response> {
+        let span_ctx = Some(SpanContext::new_with_optional_collector(
+            self.common_state.trace_collector(),
+        ));
+
+        let stream = self
+            .query_executor
+            .query_sql(database, query_str, None, span_ctx, None)
             .await?;
 
         ResponseBuilder::new()
@@ -2237,6 +2346,9 @@ pub(crate) async fn route_request(
         (Method::POST, all_paths::API_V3_WRITE) => http_server.write_lp(req).await,
         (Method::GET | Method::POST, all_paths::API_V3_QUERY_SQL) => {
             http_server.query_sql(req).await
+        }
+        (Method::GET | Method::POST, all_paths::API_V3_QUERY_DISTRIBUTED) => {
+            http_server.query_distributed(req).await
         }
         (Method::GET | Method::POST, all_paths::API_V3_QUERY_INFLUXQL) => {
             http_server.query_influxql(req).await

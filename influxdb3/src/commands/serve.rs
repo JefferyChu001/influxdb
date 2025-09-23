@@ -1153,6 +1153,7 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
         Arc::clone(&processing_engine),
         config.max_http_request_size,
         Arc::clone(&authorizer),
+        cluster_manager.clone(),
     ));
 
     // Only create recovery server if listener was created
