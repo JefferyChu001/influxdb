@@ -169,6 +169,8 @@ pub struct Node {
     pub id: NodeId,
     /// Network address for cluster communication
     pub addr: SocketAddr,
+    /// HTTP endpoint for client communication
+    pub http_endpoint: Option<String>,
     /// Current status of the node
     pub status: NodeStatus,
     /// Node capabilities and configuration
@@ -181,6 +183,18 @@ impl Node {
         Self {
             id,
             addr,
+            http_endpoint: None,
+            status: NodeStatus::default(),
+            capabilities: NodeCapabilities::default(),
+        }
+    }
+
+    /// Create a new node with HTTP endpoint
+    pub fn new_with_http(id: NodeId, addr: SocketAddr, http_endpoint: String) -> Self {
+        Self {
+            id,
+            addr,
+            http_endpoint: Some(http_endpoint),
             status: NodeStatus::default(),
             capabilities: NodeCapabilities::default(),
         }

@@ -1,6 +1,7 @@
 pub(crate) const API_LEGACY_WRITE: &str = "/write";
 pub(crate) const API_V2_WRITE: &str = "/api/v2/write";
 pub(crate) const API_V3_WRITE: &str = "/api/v3/write_lp";
+pub(crate) const API_V3_WRITE_INTERNAL: &str = "/api/v3/write_lp_internal";
 pub(crate) const API_V3_QUERY_SQL: &str = "/api/v3/query_sql";
 pub(crate) const API_V3_QUERY_INFLUXQL: &str = "/api/v3/query_influxql";
 pub(crate) const API_V3_QUERY_DISTRIBUTED: &str = "/api/v3/query_distributed";
@@ -33,3 +34,4 @@ pub(crate) const API_V3_CONFIGURE_ADMIN_TOKEN_REGENERATE: &str =
 pub(crate) const API_V3_CONFIGURE_NAMED_ADMIN_TOKEN: &str = "/api/v3/configure/token/named_admin";
 pub(crate) const API_V3_TEST_WAL_ROUTE: &str = "/api/v3/plugin_test/wal";
 pub(crate) const API_V3_TEST_PLUGIN_ROUTE: &str = "/api/v3/plugin_test/schedule";
+pub(crate) const CLUSTER_GOSSIP: &str = "/cluster/gossip";

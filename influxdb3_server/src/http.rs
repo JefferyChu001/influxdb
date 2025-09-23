@@ -783,6 +783,49 @@ impl HttpApi {
         self.write_lp_inner(params, req, false).await
     }
 
+    async fn write_lp_internal(&self, req: Request) -> Result<Response> {
+        let query = req.uri().query().ok_or(Error::MissingWriteParams)?;
+        let params: WriteParams = serde_urlencoded::from_str(query)?;
+        self.write_lp_internal_inner(params, req).await
+    }
+
+    async fn write_lp_internal_inner(
+        &self,
+        params: WriteParams,
+        req: Request,
+    ) -> Result<Response> {
+        // Internal write endpoint - always write locally, never distribute
+        validate_db_name(&params.db, false)?;
+        let body = self.read_body(req).await?;
+        let body_str = std::str::from_utf8(&body).map_err(Error::NonUtf8Body)?;
+
+        let database = NamespaceName::new(params.db.clone())?;
+
+        // Write directly to local buffer
+        let default_time = self.time_provider.now();
+        let result = self
+            .write_buffer
+            .write_lp(
+                database,
+                body_str,
+                default_time,
+                params.accept_partial.unwrap_or(true),
+                params.precision.unwrap_or(Precision::Auto),
+                params.no_sync.unwrap_or(false),
+            )
+            .await?;
+
+        let payload_size = body.len();
+        self.common_state
+            .telemetry_store
+            .add_write_metrics(1, payload_size); // Approximate line count as 1 for now
+
+        // Return success response
+        Ok(ResponseBuilder::new()
+            .status(StatusCode::OK)
+            .body(bytes_to_response_body("".to_string()))?)
+    }
+
     async fn write_lp_inner(
         &self,
         params: WriteParams,
@@ -791,37 +834,146 @@ impl HttpApi {
     ) -> Result<Response> {
         validate_db_name(&params.db, accept_rp)?;
         let body = self.read_body(req).await?;
-        let body = std::str::from_utf8(&body).map_err(Error::NonUtf8Body)?;
+        let body_str = std::str::from_utf8(&body).map_err(Error::NonUtf8Body)?;
 
-        let database = NamespaceName::new(params.db)?;
+        let database = NamespaceName::new(params.db.clone())?;
 
-        let default_time = self.time_provider.now();
+        // Check if we have a cluster manager for distributed writes
+        if let Some(cluster_manager) = &self.cluster_manager {
+            // Check if this is a master node - only masters handle client requests
+            if cluster_manager.is_master() {
+                // Master node: check if we have slave nodes to route to
+                let node_endpoints = cluster_manager.get_node_endpoints().await;
+                let current_node_id = cluster_manager.node_id();
 
-        let result = self
-            .write_buffer
-            .write_lp(
-                database,
-                body,
-                default_time,
-                params.accept_partial.unwrap_or(true),
-                params.precision.unwrap_or(Precision::Auto),
-                params.no_sync.unwrap_or(false),
-            )
-            .await?;
+                // Filter out current node to get slave nodes
+                let slave_nodes: Vec<_> = node_endpoints.keys()
+                    .filter(|node_id| **node_id != *current_node_id)
+                    .collect();
 
-        let num_lines = result.line_count;
-        let payload_size = body.len();
-        self.common_state
-            .telemetry_store
-            .add_write_metrics(num_lines, payload_size);
+                if !slave_nodes.is_empty() {
+                    // We have slave nodes, route to them
+                    let write_coordinator = cluster_manager.write_coordinator();
+                    match write_coordinator.route_line_protocol_write(&params.db, &body).await {
+                Ok(response) => {
+                    let payload_size = body.len();
+                    self.common_state
+                        .telemetry_store
+                        .add_write_metrics(1, payload_size); // Approximate line count as 1 for now
 
-        if result.invalid_lines.is_empty() {
-            ResponseBuilder::new()
-                .status(StatusCode::NO_CONTENT)
-                .body(empty_response_body())
-                .map_err(Into::into)
+                    if response.success {
+                        observability_deps::tracing::info!(
+                            database = %params.db,
+                            nodes_written = response.nodes_written,
+                            execution_time_ms = response.execution_time_ms,
+                            "Successfully processed distributed write request"
+                        );
+
+                        ResponseBuilder::new()
+                            .status(StatusCode::NO_CONTENT)
+                            .body(empty_response_body())
+                            .map_err(Into::into)
+                    } else {
+                        observability_deps::tracing::warn!(
+                            database = %params.db,
+                            nodes_written = response.nodes_written,
+                            nodes_failed = response.nodes_failed,
+                            error = ?response.error,
+                            "Failed to process distributed write request"
+                        );
+
+                        Err(Error::Serialization(format!("Distributed write failed: {}",
+                            response.error.unwrap_or_else(|| "Unknown error".to_string()))))
+                    }
+                }
+                Err(e) => {
+                    observability_deps::tracing::warn!(
+                        database = %params.db,
+                        error = %e,
+                        "Failed to route distributed write request"
+                    );
+
+                    Err(Error::Serialization(format!("Write routing failed: {}", e)))
+                }
+                    }
+                } else {
+                    // No slave nodes available, write locally
+                    observability_deps::tracing::info!(
+                        database = %params.db,
+                        "No slave nodes available, writing to master node locally"
+                    );
+
+                    // Write to local buffer
+                    let default_time = self.time_provider.now();
+                    let result = self
+                        .write_buffer
+                        .write_lp(
+                            database,
+                            body_str,
+                            default_time,
+                            params.accept_partial.unwrap_or(true),
+                            params.precision.unwrap_or(Precision::Auto),
+                            params.no_sync.unwrap_or(false),
+                        )
+                        .await?;
+
+                    let num_lines = result.line_count;
+                    let payload_size = body.len();
+                    self.common_state
+                        .telemetry_store
+                        .add_write_metrics(num_lines, payload_size);
+
+                    if result.invalid_lines.is_empty() {
+                        ResponseBuilder::new()
+                            .status(StatusCode::NO_CONTENT)
+                            .body(empty_response_body())
+                            .map_err(Into::into)
+                    } else {
+                        let error_msg = format!(
+                            "Failed to parse {} lines: {:?}",
+                            result.invalid_lines.len(),
+                            result.invalid_lines
+                        );
+                        Err(Error::Serialization(error_msg))
+                    }
+                }
+            } else {
+                // Slave node: only accept writes from master (with special header)
+                // For now, reject direct client writes to slaves
+                return Err(Error::Serialization(
+                    "Slave nodes do not accept direct client writes. Please send writes to the master node.".to_string()
+                ));
+            }
         } else {
-            Err(Error::PartialLpWrite(result))
+            // Fallback to local write buffer for single-node mode
+            let default_time = self.time_provider.now();
+
+            let result = self
+                .write_buffer
+                .write_lp(
+                    database,
+                    body_str,
+                    default_time,
+                    params.accept_partial.unwrap_or(true),
+                    params.precision.unwrap_or(Precision::Auto),
+                    params.no_sync.unwrap_or(false),
+                )
+                .await?;
+
+            let num_lines = result.line_count;
+            let payload_size = body.len();
+            self.common_state
+                .telemetry_store
+                .add_write_metrics(num_lines, payload_size);
+
+            if result.invalid_lines.is_empty() {
+                ResponseBuilder::new()
+                    .status(StatusCode::NO_CONTENT)
+                    .body(empty_response_body())
+                    .map_err(Into::into)
+            } else {
+                Err(Error::PartialLpWrite(result))
+            }
         }
     }
 
@@ -984,6 +1136,46 @@ impl HttpApi {
             Err(e) => {
                 error!(error = %e, "Distributed query execution failed");
                 Err(Error::Serialization(format!("Distributed query failed: {}", e)))
+            }
+        }
+    }
+
+    async fn handle_gossip(&self, req: Request) -> Result<Response> {
+        // Check if cluster mode is enabled
+        let cluster_manager = match &self.cluster_manager {
+            Some(cm) => cm,
+            None => {
+                return Err(Error::Serialization("Cluster mode not enabled".to_string()));
+            }
+        };
+
+        // Read the request body
+        let body = self.read_body(req).await?;
+        let message_str = std::str::from_utf8(&body).map_err(Error::NonUtf8Body)?;
+
+        // Parse the gossip message
+        let message: influxdb3_cluster::gossip::GossipMessage = serde_json::from_str(message_str)
+            .map_err(|e| Error::Serialization(format!("Failed to parse gossip message: {}", e)))?;
+
+        // Handle the gossip message
+        let gossip_protocol = cluster_manager.gossip_protocol();
+        match gossip_protocol.handle_message(message).await {
+            Ok(response_message) => {
+                let response_json = serde_json::to_string(&response_message)
+                    .map_err(|e| Error::Serialization(format!("Failed to serialize response: {}", e)))?;
+
+                ResponseBuilder::new()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(bytes_to_response_body(response_json))
+                    .map_err(Into::into)
+            }
+            Err(e) => {
+                observability_deps::tracing::warn!(
+                    error = %e,
+                    "Failed to handle gossip message"
+                );
+                Err(Error::Serialization(format!("Gossip handling failed: {}", e)))
             }
         }
     }
@@ -2344,11 +2536,15 @@ pub(crate) async fn route_request(
             }
         }
         (Method::POST, all_paths::API_V3_WRITE) => http_server.write_lp(req).await,
+        (Method::POST, all_paths::API_V3_WRITE_INTERNAL) => http_server.write_lp_internal(req).await,
         (Method::GET | Method::POST, all_paths::API_V3_QUERY_SQL) => {
             http_server.query_sql(req).await
         }
         (Method::GET | Method::POST, all_paths::API_V3_QUERY_DISTRIBUTED) => {
             http_server.query_distributed(req).await
+        }
+        (Method::POST, all_paths::CLUSTER_GOSSIP) => {
+            http_server.handle_gossip(req).await
         }
         (Method::GET | Method::POST, all_paths::API_V3_QUERY_INFLUXQL) => {
             http_server.query_influxql(req).await

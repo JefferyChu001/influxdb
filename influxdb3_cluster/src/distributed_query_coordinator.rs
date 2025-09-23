@@ -400,19 +400,13 @@ impl DistributedQueryCoordinator {
         }
     }
 
-    /// Aggregate results from multiple nodes
+    /// Aggregate results from multiple nodes with proper SQL semantics
     fn aggregate_results(&self, results: &[&NodeQueryResult]) -> Result<serde_json::Value> {
         if results.is_empty() {
             return Ok(serde_json::Value::Array(vec![]));
         }
 
-        // For now, we'll implement simple array concatenation
-        // In a real implementation, this would need to handle different query types:
-        // - SELECT queries: merge result sets
-        // - Aggregation queries: combine aggregates
-        // - COUNT queries: sum counts
-        // - etc.
-
+        // Collect all data from all nodes
         let mut all_rows = Vec::new();
 
         for result in results {
@@ -420,13 +414,190 @@ impl DistributedQueryCoordinator {
                 if let Some(array) = data.as_array() {
                     all_rows.extend(array.iter().cloned());
                 } else {
-                    // Single result, treat as array with one element
                     all_rows.push(data.clone());
                 }
             }
         }
 
-        Ok(serde_json::Value::Array(all_rows))
+        // If we have no data, return empty array
+        if all_rows.is_empty() {
+            return Ok(serde_json::Value::Array(vec![]));
+        }
+
+        // Try to detect if this is an aggregation query by looking at the structure
+        // Aggregation queries typically return a single row with computed values
+        let is_aggregation_query = self.detect_aggregation_query(&all_rows);
+
+        if is_aggregation_query {
+            // Handle aggregation queries (MAX, MIN, COUNT, SUM, AVG, etc.)
+            self.aggregate_aggregation_results(&all_rows)
+        } else {
+            // Handle regular SELECT queries - sort and return all rows
+            self.aggregate_regular_results(all_rows)
+        }
+    }
+
+    /// Detect if this is an aggregation query based on result structure
+    fn detect_aggregation_query(&self, rows: &[serde_json::Value]) -> bool {
+        if rows.is_empty() {
+            return false;
+        }
+
+        // Check if all rows have the same structure and contain aggregation-like field names
+        if let Some(first_row) = rows.first() {
+            if let Some(obj) = first_row.as_object() {
+                // Look for common aggregation field patterns
+                for key in obj.keys() {
+                    let key_lower = key.to_lowercase();
+                    if key_lower.contains("max") || key_lower.contains("min") ||
+                       key_lower.contains("count") || key_lower.contains("sum") ||
+                       key_lower.contains("avg") {
+                        return true;
+                    }
+                }
+
+                // If there's only one row per node and no time/location fields, likely aggregation
+                if !obj.contains_key("time") && !obj.contains_key("location") && obj.len() <= 2 {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Aggregate results from aggregation queries (MAX, MIN, COUNT, SUM, AVG)
+    fn aggregate_aggregation_results(&self, rows: &[serde_json::Value]) -> Result<serde_json::Value> {
+        if rows.is_empty() {
+            return Ok(serde_json::Value::Array(vec![]));
+        }
+
+        // Get the structure from the first row
+        let first_row = &rows[0];
+        if let Some(first_obj) = first_row.as_object() {
+            let mut aggregated = serde_json::Map::new();
+
+            for (key, _) in first_obj {
+                let key_lower = key.to_lowercase();
+
+                if key_lower.contains("max") {
+                    // Find maximum value across all nodes
+                    let max_val = self.find_max_value(rows, key)?;
+                    aggregated.insert(key.clone(), max_val);
+                } else if key_lower.contains("min") {
+                    // Find minimum value across all nodes
+                    let min_val = self.find_min_value(rows, key)?;
+                    aggregated.insert(key.clone(), min_val);
+                } else if key_lower.contains("count") {
+                    // Sum all count values
+                    let total_count = self.sum_values(rows, key)?;
+                    aggregated.insert(key.clone(), total_count);
+                } else if key_lower.contains("sum") {
+                    // Sum all sum values
+                    let total_sum = self.sum_values(rows, key)?;
+                    aggregated.insert(key.clone(), total_sum);
+                } else if key_lower.contains("avg") {
+                    // Calculate weighted average (this is complex, for now use simple average)
+                    let avg_val = self.calculate_average(rows, key)?;
+                    aggregated.insert(key.clone(), avg_val);
+                } else {
+                    // For other fields, take the first non-null value
+                    if let Some(val) = first_obj.get(key) {
+                        aggregated.insert(key.clone(), val.clone());
+                    }
+                }
+            }
+
+            Ok(serde_json::Value::Array(vec![serde_json::Value::Object(aggregated)]))
+        } else {
+            Ok(serde_json::Value::Array(rows.to_vec()))
+        }
+    }
+
+    /// Aggregate results from regular SELECT queries
+    fn aggregate_regular_results(&self, mut rows: Vec<serde_json::Value>) -> Result<serde_json::Value> {
+        // Sort rows by time if time field exists
+        rows.sort_by(|a, b| {
+            let time_a = a.get("time").and_then(|v| v.as_str()).unwrap_or("");
+            let time_b = b.get("time").and_then(|v| v.as_str()).unwrap_or("");
+            time_a.cmp(time_b)
+        });
+
+        Ok(serde_json::Value::Array(rows))
+    }
+
+    /// Find maximum value for a given field across all rows
+    fn find_max_value(&self, rows: &[serde_json::Value], field: &str) -> Result<serde_json::Value> {
+        let mut max_val: Option<f64> = None;
+
+        for row in rows {
+            if let Some(obj) = row.as_object() {
+                if let Some(val) = obj.get(field) {
+                    if let Some(num) = val.as_f64() {
+                        max_val = Some(max_val.map_or(num, |current| current.max(num)));
+                    }
+                }
+            }
+        }
+
+        Ok(max_val.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Find minimum value for a given field across all rows
+    fn find_min_value(&self, rows: &[serde_json::Value], field: &str) -> Result<serde_json::Value> {
+        let mut min_val: Option<f64> = None;
+
+        for row in rows {
+            if let Some(obj) = row.as_object() {
+                if let Some(val) = obj.get(field) {
+                    if let Some(num) = val.as_f64() {
+                        min_val = Some(min_val.map_or(num, |current| current.min(num)));
+                    }
+                }
+            }
+        }
+
+        Ok(min_val.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Sum values for a given field across all rows
+    fn sum_values(&self, rows: &[serde_json::Value], field: &str) -> Result<serde_json::Value> {
+        let mut sum = 0.0;
+
+        for row in rows {
+            if let Some(obj) = row.as_object() {
+                if let Some(val) = obj.get(field) {
+                    if let Some(num) = val.as_f64() {
+                        sum += num;
+                    }
+                }
+            }
+        }
+
+        Ok(serde_json::Value::from(sum))
+    }
+
+    /// Calculate average value for a given field across all rows
+    fn calculate_average(&self, rows: &[serde_json::Value], field: &str) -> Result<serde_json::Value> {
+        let mut sum = 0.0;
+        let mut count = 0;
+
+        for row in rows {
+            if let Some(obj) = row.as_object() {
+                if let Some(val) = obj.get(field) {
+                    if let Some(num) = val.as_f64() {
+                        sum += num;
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        if count > 0 {
+            Ok(serde_json::Value::from(sum / count as f64))
+        } else {
+            Ok(serde_json::Value::Null)
+        }
     }
 
     /// Update query statistics

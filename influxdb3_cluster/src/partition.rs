@@ -39,13 +39,36 @@ impl PartitionManager {
     /// Get the primary node responsible for a partition key
     pub async fn get_node_for_key(&self, key: &str) -> Option<NodeId> {
         let ring = self.hash_ring.read().await;
-        ring.get_node(key)
+        if let Some(node_id) = ring.get_node(key) {
+            // Verify the node exists in membership
+            let membership = self.membership.read().await;
+            if membership.get_node(&node_id).is_some() {
+                Some(node_id)
+            } else {
+                // If the primary node doesn't exist, try to find an alternative
+                let nodes = ring.get_nodes(key, ring.node_count());
+                for candidate in nodes {
+                    if membership.get_node(&candidate).is_some() {
+                        return Some(candidate);
+                    }
+                }
+                None
+            }
+        } else {
+            None
+        }
     }
     
     /// Get all nodes responsible for a partition key (including replicas)
     pub async fn get_nodes_for_key(&self, key: &str) -> Vec<NodeId> {
         let ring = self.hash_ring.read().await;
-        ring.get_nodes(key, self.config.replication_factor)
+        let nodes = ring.get_nodes(key, self.config.replication_factor);
+
+        // Filter out nodes that don't exist in the membership
+        let membership = self.membership.read().await;
+        nodes.into_iter()
+            .filter(|node_id| membership.get_node(node_id).is_some())
+            .collect()
     }
 
     /// Partition a write batch across multiple nodes based on series keys
@@ -128,12 +151,18 @@ impl PartitionManager {
         ring.add_node(node_id);
         Ok(())
     }
-    
+
     /// Remove a node from the hash ring
     pub async fn remove_node(&self, node_id: &NodeId) -> Result<()> {
         let mut ring = self.hash_ring.write().await;
         ring.remove_node(node_id);
         Ok(())
+    }
+
+    /// Get all nodes currently in the hash ring
+    pub async fn get_current_nodes(&self) -> std::collections::HashSet<NodeId> {
+        let ring = self.hash_ring.read().await;
+        ring.nodes.keys().cloned().collect()
     }
 
     /// Get partition assignments for rebalancing

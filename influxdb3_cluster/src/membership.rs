@@ -45,29 +45,33 @@ impl MembershipManager {
     /// Add a node to the cluster membership
     pub async fn add_node(&self, node: Node) -> Result<()> {
         let node_id = node.id.clone();
-        
+
         // Check if node already exists
         if self.nodes.contains_key(&node_id) {
             return Err(MembershipError::NodeAlreadyExists(node_id.to_string()).into());
         }
-        
+
+        // Mark the node as active when adding it to the cluster
+        let mut active_node = node.clone();
+        active_node.mark_active();
+
         // Add the node
-        self.nodes.insert(node_id.clone(), node.clone());
-        
+        self.nodes.insert(node_id.clone(), active_node.clone());
+
         // Increment version
         {
             let mut version = self.version.write().await;
             *version += 1;
         }
-        
+
         // Notify listeners
-        self.notify_listeners(MembershipEvent::NodeJoined(node)).await;
-        
+        self.notify_listeners(MembershipEvent::NodeJoined(active_node)).await;
+
         observability_deps::tracing::info!(
             node_id = %node_id,
             "Node added to cluster membership"
         );
-        
+
         Ok(())
     }
     
@@ -181,6 +185,26 @@ impl MembershipManager {
     pub async fn add_listener(&self, listener: Arc<dyn MembershipListener>) {
         let mut listeners = self.listeners.write().await;
         listeners.push(listener);
+    }
+
+    /// Get node endpoints for HTTP communication
+    pub async fn get_node_endpoints(&self) -> std::collections::HashMap<NodeId, String> {
+        let mut endpoints = std::collections::HashMap::new();
+        for entry in self.nodes.iter() {
+            let node = entry.value();
+            if node.status.is_available() {
+                if let Some(http_endpoint) = &node.http_endpoint {
+                    endpoints.insert(node.id.clone(), http_endpoint.clone());
+                } else {
+                    // Fallback: Convert cluster address to HTTP endpoint
+                    // Assume HTTP port is cluster port + 1000 (this is a simplification)
+                    let http_port = node.addr.port() + 1000;
+                    let endpoint = format!("http://{}:{}", node.addr.ip(), http_port);
+                    endpoints.insert(node.id.clone(), endpoint);
+                }
+            }
+        }
+        endpoints
     }
     
     /// Remove nodes that have been down for too long

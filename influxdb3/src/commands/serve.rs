@@ -467,6 +467,15 @@ pub struct Config {
     )]
     pub cluster_mode: bool,
 
+    /// Node role in cluster (master or slave)
+    #[clap(
+        long = "cluster-role",
+        env = "INFLUXDB3_CLUSTER_ROLE",
+        default_value = "master",
+        action
+    )]
+    pub cluster_role: String,
+
     /// Cluster node address for gossip communication
     #[clap(
         long = "cluster-bind",
@@ -1035,10 +1044,24 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
     // Initialize cluster manager and distributed write buffer if cluster mode is enabled
     let (write_buffer, cluster_manager) = if config.cluster_mode {
         info!("Initializing cluster mode");
+
+        // Parse node role
+        let node_role = match config.cluster_role.to_lowercase().as_str() {
+            "master" => influxdb3_cluster::NodeRole::Master,
+            "slave" => influxdb3_cluster::NodeRole::Slave,
+            _ => {
+                return Err(Error::WriteBufferInit(anyhow::anyhow!(
+                    "Invalid cluster role '{}'. Must be 'master' or 'slave'",
+                    config.cluster_role
+                )));
+            }
+        };
+
         let cluster_config = ClusterConfig {
             node_id: NodeId::from_string(&config.node_identifier_prefix)
                 .unwrap_or_else(|_| NodeId::new()),
             bind_addr: *config.cluster_bind_address,
+            http_endpoint: Some(format!("http://{}", config.http_bind_address)),
             seed_nodes: config.cluster_seeds.iter()
                 .map(|s| s.parse().expect("Invalid seed node address"))
                 .collect(),
@@ -1047,16 +1070,52 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
             ..Default::default()
         };
 
-        let cluster_manager = Arc::new(ClusterManager::new(cluster_config).await
+        let cluster_manager = Arc::new(ClusterManager::new(cluster_config, node_role.clone()).await
             .map_err(|e| Error::WriteBufferInit(anyhow::anyhow!("Failed to initialize cluster: {}", e)))?);
+
+        // Start the cluster manager
+        cluster_manager.start().await
+            .map_err(|e| Error::WriteBufferInit(anyhow::anyhow!("Failed to start cluster: {}", e)))?;
 
         info!(
             node_id = %config.node_identifier_prefix,
             bind_address = %config.cluster_bind_address,
             seeds = ?config.cluster_seeds,
             replication_factor = config.cluster_replication_factor,
-            "Cluster manager initialized"
+            role = ?node_role,
+            "Cluster manager initialized and started"
         );
+
+        // Initialize node endpoints for coordinators
+        let mut initial_endpoints = std::collections::HashMap::new();
+
+        // Add current node endpoint
+        let current_node_endpoint = format!("http://{}", config.http_bind_address);
+        let current_node_id = influxdb3_cluster::NodeId::from_string(&config.node_identifier_prefix)
+            .unwrap_or_else(|_| influxdb3_cluster::NodeId::new());
+        initial_endpoints.insert(current_node_id, current_node_endpoint);
+
+        // Add seed node endpoints if available
+        for seed_str in &config.cluster_seeds {
+            // Parse seed string as SocketAddr
+            if let Ok(seed_addr) = seed_str.parse::<std::net::SocketAddr>() {
+                // For now, assume HTTP port is cluster port + 1000
+                // This is a simplification - in production, you'd want proper service discovery
+                let http_port = seed_addr.port() + 1000;
+                let seed_endpoint = format!("http://{}:{}", seed_addr.ip(), http_port);
+                let seed_node_id = influxdb3_cluster::NodeId::from_string(&format!("node-{}", seed_addr.port()))
+                    .unwrap_or_else(|_| influxdb3_cluster::NodeId::new());
+                initial_endpoints.insert(seed_node_id, seed_endpoint);
+            } else {
+                warn!(
+                    seed = %seed_str,
+                    "Failed to parse cluster seed address"
+                );
+            }
+        }
+
+        // Update coordinators with initial endpoints
+        cluster_manager.update_node_endpoints(initial_endpoints).await;
 
         // Create distributed write buffer that wraps the local buffer
         let distributed_buffer = Arc::new(DistributedWriteBuffer::new(

@@ -8,7 +8,7 @@ mod tests {
     #[tokio::test]
     async fn test_cluster_manager_creation() {
         let config = ClusterConfig::test_config();
-        let cluster = ClusterManager::new(config).await.unwrap();
+        let cluster = ClusterManager::new(config, crate::NodeRole::Master).await.unwrap();
         
         // Test that we can get membership (should be empty initially)
         let membership = cluster.get_membership().await;
@@ -20,7 +20,7 @@ mod tests {
         let mut config = ClusterConfig::test_config();
         config.bind_addr = "127.0.0.1:0".parse().unwrap(); // Use random port
         
-        let cluster = ClusterManager::new(config).await.unwrap();
+        let cluster = ClusterManager::new(config, crate::NodeRole::Master).await.unwrap();
         
         // Start the cluster
         cluster.start().await.unwrap();

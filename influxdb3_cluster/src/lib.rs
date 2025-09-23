@@ -66,21 +66,32 @@ pub use distributed_query_coordinator::{
 pub use error::{ClusterError, Result};
 pub use node::{Node, NodeId, NodeState, NodeStatus};
 
+/// Node role in the cluster
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeRole {
+    /// Master node - handles client requests and coordinates tasks
+    Master,
+    /// Slave node - processes tasks assigned by master
+    Slave,
+}
+
 /// The main cluster manager that coordinates all distributed operations
 #[derive(Debug)]
 pub struct ClusterManager {
     config: ClusterConfig,
+    role: NodeRole,
     membership: Arc<RwLock<membership::MembershipManager>>,
     gossip: Arc<gossip::GossipProtocol>,
     health: Arc<health::HealthMonitor>,
     partition: Arc<partition::PartitionManager>,
     raft: Option<Arc<raft::RaftConsensus>>,
     query_coordinator: Arc<distributed_query_coordinator::DistributedQueryCoordinator>,
+    write_coordinator: Arc<write_coordinator::WriteCoordinator>,
 }
 
 impl ClusterManager {
     /// Create a new cluster manager with the given configuration
-    pub async fn new(config: ClusterConfig) -> Result<Self> {
+    pub async fn new(config: ClusterConfig, role: NodeRole) -> Result<Self> {
         let membership = Arc::new(RwLock::new(
             membership::MembershipManager::new(config.node_id.clone())
         ));
@@ -121,14 +132,20 @@ impl ClusterManager {
             distributed_query_coordinator::DistributedQueryCoordinator::new(None)
         );
 
+        let write_coordinator = Arc::new(
+            write_coordinator::WriteCoordinator::new(config.clone(), partition.clone()).await?
+        );
+
         Ok(Self {
             config,
+            role,
             membership,
             gossip,
             health,
             partition,
             raft,
             query_coordinator,
+            write_coordinator,
         })
     }
     
@@ -151,8 +168,11 @@ impl ClusterManager {
         // Join the cluster by connecting to seed nodes
         self.join_cluster().await?;
 
-        // Update query coordinator with initial node list
+        // Update all coordinators with initial node list
         self.update_query_coordinator_nodes().await?;
+
+        // Start a background task to periodically update endpoints
+        self.start_endpoint_updater().await;
 
         Ok(())
     }
@@ -170,6 +190,91 @@ impl ClusterManager {
     /// Get the distributed query coordinator
     pub fn query_coordinator(&self) -> Arc<distributed_query_coordinator::DistributedQueryCoordinator> {
         Arc::clone(&self.query_coordinator)
+    }
+
+    /// Get the write coordinator
+    pub fn write_coordinator(&self) -> Arc<write_coordinator::WriteCoordinator> {
+        Arc::clone(&self.write_coordinator)
+    }
+
+    /// Get the gossip protocol
+    pub fn gossip_protocol(&self) -> Arc<gossip::GossipProtocol> {
+        Arc::clone(&self.gossip)
+    }
+
+    /// Get the node role
+    pub fn role(&self) -> &NodeRole {
+        &self.role
+    }
+
+    /// Check if this node is the master
+    pub fn is_master(&self) -> bool {
+        self.role == NodeRole::Master
+    }
+
+    /// Check if this node is a slave
+    pub fn is_slave(&self) -> bool {
+        self.role == NodeRole::Slave
+    }
+
+    /// Get the node ID
+    pub fn node_id(&self) -> &NodeId {
+        &self.config.node_id
+    }
+
+    /// Get current node endpoints
+    pub async fn get_node_endpoints(&self) -> std::collections::HashMap<NodeId, String> {
+        let membership = self.membership.read().await;
+        membership.get_node_endpoints().await
+    }
+
+    /// Update node endpoints for both query and write coordinators
+    pub async fn update_node_endpoints(&self, endpoints: std::collections::HashMap<NodeId, String>) {
+        // Update query coordinator endpoints (it uses std::collections::HashMap)
+        self.query_coordinator.update_nodes(endpoints.clone()).await;
+
+        // Update write coordinator endpoints (it uses std::collections::HashMap)
+        self.write_coordinator.update_node_endpoints(endpoints.clone()).await;
+
+        // Update partition manager with the new nodes (exclude master node)
+        // First, get current nodes in partition manager
+        let current_partition_nodes = self.partition.get_current_nodes().await;
+
+        // Determine which nodes should be in the partition manager (only slaves)
+        let target_partition_nodes: std::collections::HashSet<NodeId> = endpoints.keys()
+            .filter(|node_id| {
+                // Skip the master node - it should not store data, only coordinate
+                !(*node_id == &self.config.node_id && self.role == NodeRole::Master)
+            })
+            .cloned()
+            .collect();
+
+        // Remove nodes that are no longer in the cluster
+        for node_id in current_partition_nodes.difference(&target_partition_nodes) {
+            if let Err(e) = self.partition.remove_node(node_id).await {
+                observability_deps::tracing::warn!(
+                    node_id = %node_id,
+                    error = %e,
+                    "Failed to remove node from partition manager"
+                );
+            }
+        }
+
+        // Add new nodes to the partition manager
+        for node_id in target_partition_nodes.difference(&current_partition_nodes) {
+            if let Err(e) = self.partition.add_node(node_id.clone()).await {
+                observability_deps::tracing::warn!(
+                    node_id = %node_id,
+                    error = %e,
+                    "Failed to add node to partition manager"
+                );
+            }
+        }
+
+        observability_deps::tracing::info!(
+            endpoint_count = endpoints.len(),
+            "Updated cluster manager node endpoints"
+        );
     }
 
     /// Stop the cluster manager and all its components
@@ -238,61 +343,55 @@ impl ClusterManager {
         Ok(())
     }
 
-    /// Update query coordinator with current node endpoints
+    /// Update all coordinators with current node endpoints
     async fn update_query_coordinator_nodes(&self) -> Result<()> {
-        let membership = self.membership.read().await;
-        let active_nodes = membership.get_active_nodes();
+        // Get all node endpoints from membership manager
+        let endpoints = self.get_node_endpoints().await;
 
         info!(
             current_node = %self.config.node_id,
-            active_node_count = active_nodes.len(),
-            "Updating query coordinator with cluster nodes"
+            total_endpoints = endpoints.len(),
+            endpoints = ?endpoints,
+            "Updating all coordinators with cluster endpoints"
         );
 
-        let mut node_endpoints = std::collections::HashMap::new();
+        // Update all coordinators with the latest endpoints
+        self.update_node_endpoints(endpoints).await;
 
-        // Add current node
-        let current_endpoint = if self.config.bind_addr.port() == 8191 {
-            "http://127.0.0.1:8181".to_string()
-        } else {
-            "http://127.0.0.1:8182".to_string()
-        };
-        node_endpoints.insert(self.config.node_id.clone(), current_endpoint.clone());
-
-        info!(
-            node_id = %self.config.node_id,
-            endpoint = %current_endpoint,
-            "Added current node to query coordinator"
-        );
-
-        // Add other active nodes (assuming they use HTTP on port 8181/8182)
-        for node in active_nodes {
-            if node.id != self.config.node_id {
-                // For now, we'll construct endpoints based on known patterns
-                // In a real implementation, this would come from service discovery
-                let endpoint = if node.id.to_string().contains("node2") {
-                    "http://127.0.0.1:8182".to_string()
-                } else {
-                    "http://127.0.0.1:8181".to_string()
-                };
-                node_endpoints.insert(node.id.clone(), endpoint.clone());
-
-                info!(
-                    node_id = %node.id,
-                    endpoint = %endpoint,
-                    "Added cluster node to query coordinator"
-                );
-            }
-        }
-
-        info!(
-            total_endpoints = node_endpoints.len(),
-            endpoints = ?node_endpoints,
-            "Updating query coordinator with all endpoints"
-        );
-
-        self.query_coordinator.update_nodes(node_endpoints).await;
         Ok(())
+    }
+
+    /// Start a background task to periodically update endpoints
+    async fn start_endpoint_updater(&self) {
+        let membership = Arc::clone(&self.membership);
+        let query_coordinator = Arc::clone(&self.query_coordinator);
+        let write_coordinator = Arc::clone(&self.write_coordinator);
+        let partition = Arc::clone(&self.partition);
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+
+                // Get current endpoints
+                let membership_guard = membership.read().await;
+                let endpoints = membership_guard.get_node_endpoints().await;
+                drop(membership_guard);
+
+                if !endpoints.is_empty() {
+                    // Update query coordinator
+                    query_coordinator.update_nodes(endpoints.clone()).await;
+
+                    // Update write coordinator
+                    write_coordinator.update_node_endpoints(endpoints.clone()).await;
+
+                    // Update partition manager
+                    for node_id in endpoints.keys() {
+                        let _ = partition.add_node(node_id.clone()).await;
+                    }
+                }
+            }
+        });
     }
 }
 

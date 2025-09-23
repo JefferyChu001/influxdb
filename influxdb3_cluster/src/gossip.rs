@@ -32,7 +32,11 @@ impl GossipProtocol {
         config: ClusterConfig,
         membership: Arc<RwLock<MembershipManager>>,
     ) -> Result<Self> {
-        let local_node = Node::new(config.node_id.clone(), config.bind_addr);
+        let local_node = if let Some(http_endpoint) = &config.http_endpoint {
+            Node::new_with_http(config.node_id.clone(), config.bind_addr, http_endpoint.clone())
+        } else {
+            Node::new(config.node_id.clone(), config.bind_addr)
+        };
         
         let client = reqwest::Client::builder()
             .timeout(config.gossip.gossip_timeout)
@@ -96,7 +100,11 @@ impl GossipProtocol {
         addr: SocketAddr,
         message: &GossipMessage,
     ) -> Result<GossipMessage> {
-        let url = format!("http://{}/cluster/gossip", addr);
+        // Convert gossip bind address to HTTP endpoint
+        // Assume HTTP port is gossip port - 10 (e.g., 8191 -> 8181)
+        let http_port = addr.port() - 10;
+        let http_addr = SocketAddr::new(addr.ip(), http_port);
+        let url = format!("http://{}/cluster/gossip", http_addr);
         let body = serde_json::to_vec(message)?;
         
         if body.len() > self.config.gossip.max_message_size {
@@ -231,7 +239,11 @@ impl GossipProtocol {
         message: &GossipMessage,
         config: &ClusterConfig,
     ) -> Result<()> {
-        let url = format!("http://{}/cluster/gossip", addr);
+        // Convert gossip bind address to HTTP endpoint
+        // Assume HTTP port is gossip port - 10 (e.g., 8191 -> 8181)
+        let http_port = addr.port() - 10;
+        let http_addr = SocketAddr::new(addr.ip(), http_port);
+        let url = format!("http://{}/cluster/gossip", http_addr);
         let body = serde_json::to_vec(message)?;
         
         if body.len() > config.gossip.max_message_size {

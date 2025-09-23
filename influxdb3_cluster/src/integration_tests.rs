@@ -32,8 +32,10 @@ async fn test_distributed_write_partitioning() -> Result<()> {
 
     // Create cluster managers for each node
     let mut cluster_managers = Vec::new();
-    for config in &configs {
-        let manager = ClusterManager::new(config.clone()).await?;
+    for (i, config) in configs.iter().enumerate() {
+        // First node is master, others are slaves
+        let role = if i == 0 { crate::NodeRole::Master } else { crate::NodeRole::Slave };
+        let manager = ClusterManager::new(config.clone(), role).await?;
         cluster_managers.push(manager);
     }
 

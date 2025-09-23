@@ -11,10 +11,13 @@ use std::time::Duration;
 pub struct ClusterConfig {
     /// Unique identifier for this node
     pub node_id: NodeId,
-    
+
     /// Address to bind the cluster communication port
     pub bind_addr: SocketAddr,
-    
+
+    /// HTTP endpoint for client communication
+    pub http_endpoint: Option<String>,
+
     /// List of seed nodes to connect to when joining the cluster
     pub seed_nodes: Vec<SocketAddr>,
     
@@ -48,6 +51,7 @@ impl Default for ClusterConfig {
         Self {
             node_id: NodeId::new(),
             bind_addr: "127.0.0.1:8300".parse().unwrap(),
+            http_endpoint: None,
             seed_nodes: Vec::new(),
             gossip: GossipConfig::default(),
             health: HealthConfig::default(),

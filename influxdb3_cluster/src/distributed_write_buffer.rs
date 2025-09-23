@@ -200,7 +200,7 @@ mod tests {
             ..Default::default()
         };
 
-        let _cluster_manager = ClusterManager::new(config).await.unwrap();
+        let _cluster_manager = ClusterManager::new(config, crate::NodeRole::Master).await.unwrap();
 
         // Test passes if we can create the cluster manager without panicking
         // In a real test, we would create a DistributedWriteBuffer with a real WriteBuffer
