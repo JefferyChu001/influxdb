@@ -162,11 +162,14 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 num = { version = "0.4.3" }
 
 # Local workspace crates
+influxdb3_cache = { path = "influxdb3_cache" }
+influxdb3_catalog = { path = "influxdb3_catalog" }
 influxdb3_cluster = { path = "influxdb3_cluster" }
 influxdb3_id = { path = "influxdb3_id" }
 influxdb3_shutdown = { path = "influxdb3_shutdown" }
 influxdb3_types = { path = "influxdb3_types" }
 influxdb3_wal = { path = "influxdb3_wal" }
+influxdb3_write = { path = "influxdb3_write" }
 
 # Core.git crates we depend on
 arrow_util = { git = "https://github.com/influxdata/influxdb3_core", rev = "f1bc15655d50e07e2cb4d7a52acf5b1d24ff6516" }

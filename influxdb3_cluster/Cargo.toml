@@ -28,12 +28,19 @@ tokio-util.workspace = true
 uuid.workspace = true
 
 # Core dependencies
+data_types.workspace = true
+datafusion.workspace = true
+influxdb3_cache.workspace = true
+influxdb3_catalog.workspace = true
 influxdb3_id.workspace = true
 influxdb3_shutdown.workspace = true
 influxdb3_types.workspace = true
 influxdb3_wal.workspace = true
+influxdb3_write.workspace = true
+iox_query.workspace = true
 iox_time.workspace = true
 metric.workspace = true
+schema.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

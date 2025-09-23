@@ -10,6 +10,7 @@ use influxdb3_cache::{
     parquet_cache::create_cached_obj_store_and_oracle,
 };
 use influxdb3_catalog::{CatalogError, catalog::Catalog};
+use influxdb3_cluster::{ClusterManager, ClusterConfig, NodeId, DistributedWriteBuffer, write_coordinator::ConsistencyLevel};
 use influxdb3_clap_blocks::plugins::{PackageManager, ProcessingEngineConfig};
 use influxdb3_clap_blocks::{
     datafusion::IoxQueryDatafusionConfig, memory_size::MemorySize, object_store::ObjectStoreConfig,
@@ -457,6 +458,41 @@ pub struct Config {
     /// The processing engine config.
     #[clap(flatten)]
     pub processing_engine_config: ProcessingEngineConfig,
+
+    /// Enable distributed cluster mode
+    #[clap(
+        long = "cluster-mode",
+        env = "INFLUXDB3_CLUSTER_MODE",
+        action
+    )]
+    pub cluster_mode: bool,
+
+    /// Cluster node address for gossip communication
+    #[clap(
+        long = "cluster-bind",
+        env = "INFLUXDB3_CLUSTER_BIND_ADDR",
+        default_value = "0.0.0.0:8191",
+        action
+    )]
+    pub cluster_bind_address: SocketAddr,
+
+    /// Seed nodes for cluster discovery (comma-separated list of addresses)
+    #[clap(
+        long = "cluster-seeds",
+        env = "INFLUXDB3_CLUSTER_SEEDS",
+        value_delimiter = ',',
+        action
+    )]
+    pub cluster_seeds: Vec<String>,
+
+    /// Cluster replication factor
+    #[clap(
+        long = "cluster-replication-factor",
+        env = "INFLUXDB3_CLUSTER_REPLICATION_FACTOR",
+        default_value = "3",
+        action
+    )]
+    pub cluster_replication_factor: usize,
 
     /// Threshold for internal buffer, can be either percentage or absolute value in MB.
     /// eg: 70% or 1000 MB
@@ -994,7 +1030,47 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
     })
     .await;
 
-    let write_buffer: Arc<dyn WriteBuffer> = write_buffer_impl;
+    let local_write_buffer: Arc<dyn WriteBuffer> = write_buffer_impl;
+
+    // Initialize cluster manager and distributed write buffer if cluster mode is enabled
+    let (write_buffer, cluster_manager) = if config.cluster_mode {
+        info!("Initializing cluster mode");
+        let cluster_config = ClusterConfig {
+            node_id: NodeId::from_string(&config.node_identifier_prefix)
+                .unwrap_or_else(|_| NodeId::new()),
+            bind_addr: *config.cluster_bind_address,
+            seed_nodes: config.cluster_seeds.iter()
+                .map(|s| s.parse().expect("Invalid seed node address"))
+                .collect(),
+            replication_factor: config.cluster_replication_factor,
+            consistency_level: ConsistencyLevel::Quorum,
+            ..Default::default()
+        };
+
+        let cluster_manager = Arc::new(ClusterManager::new(cluster_config).await
+            .map_err(|e| Error::WriteBufferInit(anyhow::anyhow!("Failed to initialize cluster: {}", e)))?);
+
+        info!(
+            node_id = %config.node_identifier_prefix,
+            bind_address = %config.cluster_bind_address,
+            seeds = ?config.cluster_seeds,
+            replication_factor = config.cluster_replication_factor,
+            "Cluster manager initialized"
+        );
+
+        // Create distributed write buffer that wraps the local buffer
+        let distributed_buffer = Arc::new(DistributedWriteBuffer::new(
+            Arc::clone(&local_write_buffer),
+            Arc::clone(&cluster_manager),
+        ).await.map_err(|e| Error::WriteBufferInit(anyhow::anyhow!("Failed to initialize distributed write buffer: {}", e)))?);
+
+        info!("Distributed write buffer initialized");
+
+        (distributed_buffer as Arc<dyn WriteBuffer>, Some(cluster_manager))
+    } else {
+        info!("Running in single-node mode");
+        (local_write_buffer, None)
+    };
 
     let common_state = CommonServerState::new(
         Arc::clone(&metrics),

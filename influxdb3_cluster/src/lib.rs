@@ -35,6 +35,7 @@
 
 pub mod config;
 pub mod discovery;
+pub mod distributed_write_buffer;
 pub mod error;
 pub mod gossip;
 pub mod health;
@@ -45,6 +46,9 @@ pub mod raft;
 pub mod write_coordinator;
 
 #[cfg(test)]
+pub mod integration_tests;
+
+#[cfg(test)]
 mod tests;
 
 use async_trait::async_trait;
@@ -52,6 +56,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub use config::ClusterConfig;
+pub use distributed_write_buffer::DistributedWriteBuffer;
 pub use error::{ClusterError, Result};
 pub use node::{Node, NodeId, NodeState, NodeStatus};
 
@@ -137,13 +142,23 @@ impl ClusterManager {
         Ok(())
     }
     
+    /// Get the partition manager
+    pub fn partition_manager(&self) -> Arc<partition::PartitionManager> {
+        Arc::clone(&self.partition)
+    }
+
+    /// Get the membership manager
+    pub fn membership_manager(&self) -> Arc<RwLock<membership::MembershipManager>> {
+        Arc::clone(&self.membership)
+    }
+
     /// Stop the cluster manager and all its components
     pub async fn stop(&self) -> Result<()> {
         // Stop components in reverse order
         if let Some(raft) = &self.raft {
             raft.stop().await?;
         }
-        
+
         self.partition.stop().await?;
         self.health.stop().await?;
         self.gossip.stop().await?;
@@ -175,6 +190,18 @@ impl ClusterManager {
             let membership = self.membership.read().await;
             membership.is_leader(&self.config.node_id).await
         }
+    }
+
+    /// Check if this is a single-node cluster
+    pub async fn is_single_node(&self) -> bool {
+        let membership = self.membership.read().await;
+        let active_nodes = membership.get_active_nodes();
+        active_nodes.len() <= 1
+    }
+
+    /// Get the cluster configuration
+    pub fn config(&self) -> &ClusterConfig {
+        &self.config
     }
     
     /// Join the cluster by connecting to seed nodes
