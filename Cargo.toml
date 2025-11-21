@@ -7,6 +7,7 @@ members = [
     "influxdb3_catalog",
     "influxdb3_clap_blocks",
     "influxdb3_client",
+    "influxdb3_cluster",
     "influxdb3_id",
     "influxdb3_internal_api",
     "influxdb3_load_generator",
@@ -97,6 +98,7 @@ home = "0.5.12"
 hostname = "0.4.1"
 http = {version = "1"}
 http-body = {version = "1"}
+
 http-body-util = {version = "0.1"}
 humantime = "2.1.0"
 humantime-serde = "1.1.1"
@@ -142,6 +144,7 @@ serde_json = "1.0.127"
 serde_urlencoded = "0.7.0"
 serde_with = "3.8.1"
 sha2 = "0.10.8"
+slog = "2.7"
 snafu = "0.8"
 snap = "1.0.0"
 sqlparser = "0.48.0"
@@ -152,6 +155,7 @@ test-log = { version = "0.2.16", features = ["trace"] }
 thiserror = "1.0"
 tokio = { version = "1.45", features = ["full"] }
 tokio-rustls = { version = "0.25", default-features = false, features = ["ring", "tls12"] }
+tokio-stream = { version = "0.1" }
 tokio-util = { version = "0.7.13", features = ["rt"] }
 tonic = { version = "0.12.3", features = ["tls", "tls-roots"] }
 tonic-build = "0.12.3"
@@ -275,6 +279,12 @@ opt-level = 3
 # arrow-cast = { git = "https://github.com/influxdata/arrow-rs.git", rev = "eae176c21b1ef915227294e8a8a201b6f266031a" }
 # arrow-csv = { git = "https://github.com/influxdata/arrow-rs.git", rev = "eae176c21b1ef915227294e8a8a201b6f266031a" }
 # arrow-data = { git = "https://github.com/influxdata/arrow-rs.git", rev = "eae176c21b1ef915227294e8a8a201b6f266031a" }
+
+# The v0.7.0 version of raft-proto has a build script that is not compatible
+# with modern protoc versions. We patch it to use a newer version from git that
+# uses prost-build, which is compatible with our setup.
+raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+
 # arrow-ipc = { git = "https://github.com/influxdata/arrow-rs.git", rev = "eae176c21b1ef915227294e8a8a201b6f266031a" }
 # arrow-json = { git = "https://github.com/influxdata/arrow-rs.git", rev = "eae176c21b1ef915227294e8a8a201b6f266031a" }
 # arrow-schema = { git = "https://github.com/influxdata/arrow-rs.git", rev = "eae176c21b1ef915227294e8a8a201b6f266031a" }

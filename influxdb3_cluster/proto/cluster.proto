@@ -1,0 +1,177 @@
+syntax = "proto3";
+
+package influxdb3.cluster;
+
+// Cluster node service for inter-node communication
+service ClusterService {
+    // Node registration
+    rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+
+    // Heartbeat
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+    // Write data to a shard
+    rpc Write(WriteRequest) returns (WriteResponse);
+
+    // Execute query on a node
+    rpc Query(QueryRequest) returns (stream QueryResponse);
+
+    // Raft message passing
+    rpc RaftMessage(RaftMessageRequest) returns (RaftMessageResponse);
+
+    // Broadcast data for Broadcast JOIN
+    rpc BroadcastData(BroadcastDataRequest) returns (BroadcastDataResponse);
+
+    // Execute local JOIN
+    rpc ExecuteLocalJoin(LocalJoinRequest) returns (stream LocalJoinResponse);
+
+    // Execute partition JOIN for Shuffle JOIN
+    rpc ExecutePartitionJoin(PartitionJoinRequest) returns (stream PartitionJoinResponse);
+}
+
+// Node registration
+message RegisterNodeRequest {
+    string node_id = 1;
+    string address = 2;
+    uint32 grpc_port = 3;
+    uint32 http_port = 4;
+    NodeRole role = 5;
+    NodeCapacity capacity = 6;
+}
+
+message RegisterNodeResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// Heartbeat
+message HeartbeatRequest {
+    string node_id = 1;
+    NodeStatus status = 2;
+    NodeCapacity capacity = 3;
+}
+
+message HeartbeatResponse {
+    bool success = 1;
+    int64 timestamp_nanos = 2;
+}
+
+// Write request
+message WriteRequest {
+    uint64 shard_id = 1;
+    bytes data = 2;
+    ConsistencyLevel consistency = 3;
+    string database = 4;
+}
+
+message WriteResponse {
+    bool success = 1;
+    string error = 2;
+    uint64 sequence_number = 3;
+}
+
+// Query request
+message QueryRequest {
+    string database = 1;
+    string query = 2;
+    repeated uint64 target_shards = 3;
+    map<string, string> params = 4;
+}
+
+message QueryResponse {
+    bytes record_batch = 1;
+    bool has_more = 2;
+    string error = 3;
+}
+
+// Raft message
+message RaftMessageRequest {
+    uint64 shard_id = 1;
+    bytes message = 2;
+}
+
+message RaftMessageResponse {
+    bool success = 1;
+}
+
+// Broadcast JOIN
+message BroadcastDataRequest {
+    string table_name = 1;
+    repeated bytes record_batches = 2;
+    string join_id = 3;
+}
+
+message BroadcastDataResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+// Local JOIN
+message LocalJoinRequest {
+    uint32 partition = 1;
+    repeated JoinColumn on = 2;
+    JoinType join_type = 3;
+    string join_id = 4;
+}
+
+message LocalJoinResponse {
+    bytes record_batch = 1;
+    bool has_more = 2;
+    string error = 3;
+}
+
+// Partition JOIN for Shuffle JOIN
+message PartitionJoinRequest {
+    uint32 partition_id = 1;
+    repeated bytes left_batches = 2;
+    repeated bytes right_batches = 3;
+    repeated JoinColumn on = 4;
+    JoinType join_type = 5;
+}
+
+message PartitionJoinResponse {
+    bytes record_batch = 1;
+    bool has_more = 2;
+    string error = 3;
+}
+
+// Common types
+message JoinColumn {
+    string left_column = 1;
+    string right_column = 2;
+}
+
+message NodeCapacity {
+    uint32 cpu_cores = 1;
+    uint64 memory_bytes = 2;
+    uint64 disk_bytes = 3;
+    uint32 current_shards = 4;
+    uint32 max_shards = 5;
+}
+
+enum NodeRole {
+    COORDINATOR = 0;
+    DATA_NODE = 1;
+    MIXED = 2;
+}
+
+enum NodeStatus {
+    ACTIVE = 0;
+    INACTIVE = 1;
+    DRAINING = 2;
+    FAILED = 3;
+}
+
+enum ConsistencyLevel {
+    ONE = 0;
+    QUORUM = 1;
+    ALL = 2;
+}
+
+enum JoinType {
+    INNER = 0;
+    LEFT = 1;
+    RIGHT = 2;
+    FULL = 3;
+}
+
