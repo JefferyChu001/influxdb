@@ -1,11 +1,20 @@
 //! Clustered write buffer that wraps the existing WriteBuffer with cluster functionality
 
-use crate::error::{Error, Result};
+use crate::error::{self, Error, Result};
 use crate::node_registry::NodeRegistry;
 use crate::replication::{WriteBatch, WriteReplicator};
 use crate::shard_manager::ShardManager;
 use crate::types::{ConsistencyLevel, ShardId};
-use influxdb3_write::{Precision, WriteBuffer};
+use async_trait::async_trait;
+use data_types::NamespaceName;
+use influxdb3_catalog::catalog::{Catalog, DatabaseSchema, TableDefinition};
+use influxdb3_id::{DbId, TableId};
+use influxdb3_wal::Wal;
+use influxdb3_write::{
+    write_buffer,
+    Bufferer, BufferedWriteRequest, ChunkContainer, ChunkFilter, DistinctCacheManager, LastCacheManager,
+    ParquetFile, PersistedSnapshotVersion, Precision, WriteBuffer,
+};
 use iox_time::Time;
 use std::sync::Arc;
 
@@ -42,6 +51,7 @@ impl ClusteredWriteBuffer {
         let replicator = Arc::new(WriteReplicator::new(
             shard_manager.clone(),
             node_registry.clone(),
+            Arc::new(crate::rpc::client::ClusterRpcClient::new()),
         ));
 
         Self {
@@ -53,101 +63,12 @@ impl ClusteredWriteBuffer {
         }
     }
 
-    /// Write line protocol data with cluster-aware routing
-    pub async fn write_lp(
-        &self,
-        database: &str,
-        lp: &str,
-        ingest_time: Time,
-        accept_partial: bool,
-        precision: Precision,
-    ) -> Result<()> {
-        // Parse line protocol to extract measurement and tags
-        let parsed_lines = self.parse_line_protocol(lp)?;
-
-        // Group writes by shard
-        let mut shard_writes: std::collections::HashMap<ShardId, Vec<String>> =
-            std::collections::HashMap::new();
-
-        for line in parsed_lines {
-            // Convert tags to &[(&str, &str)]
-            let tags_ref: Vec<(&str, &str)> = line
-                .tags
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-
-            let shard_id = self.shard_manager.route_write(
-                database,
-                &line.measurement,
-                &tags_ref,
-            );
-
-            shard_writes
-                .entry(shard_id)
-                .or_insert_with(Vec::new)
-                .push(line.raw_line);
-        }
-
-        // Write to each shard
-        for (shard_id, lines) in shard_writes {
-            let lp_data = lines.join("\n");
-
-            // Create write batch
-            let batch = WriteBatch::new(
-                database.to_string(),
-                lp_data.as_bytes().to_vec(),
-                0, // sequence number would be assigned by WAL
-            );
-
-            // Replicate write based on consistency level
-            self.replicator
-                .replicate_write(shard_id, batch, self.consistency_level)
-                .await?;
-
-            // Also write to local buffer if this node owns the shard
-            if self.is_local_shard(shard_id).await? {
-                self.write_to_local_buffer(database, &lp_data, ingest_time, accept_partial, precision)
-                    .await?;
-            }
-        }
-
-        Ok(())
-    }
-
     /// Check if a shard is owned by this node
     async fn is_local_shard(&self, shard_id: ShardId) -> Result<bool> {
         let replicas = self.shard_manager.get_shard_replicas(shard_id).await?;
         // In a real implementation, we would check if current node is in the replica list
         // For now, assume all shards are local (single node mode)
         Ok(!replicas.is_empty())
-    }
-
-    /// Write to the local write buffer
-    async fn write_to_local_buffer(
-        &self,
-        database: &str,
-        lp: &str,
-        ingest_time: Time,
-        accept_partial: bool,
-        precision: Precision,
-    ) -> Result<()> {
-        use data_types::NamespaceName;
-
-        // Convert to owned string to satisfy 'static lifetime requirement
-        let db_name = NamespaceName::new(database.to_string())
-            .map_err(|e| Error::InternalError {
-                message: format!("Invalid database name: {}", e),
-            })?;
-
-        self.local_buffer
-            .write_lp(db_name, lp, ingest_time, accept_partial, precision, false)
-            .await
-            .map_err(|e| Error::WriteError {
-                message: format!("Local write failed: {}", e),
-            })?;
-
-        Ok(())
     }
 
     /// Parse line protocol (simplified version)
@@ -205,3 +126,119 @@ struct ParsedLine {
     raw_line: String,
 }
 
+#[async_trait]
+impl Bufferer for ClusteredWriteBuffer {
+    async fn write_lp(
+        &self,
+        database: NamespaceName<'static>,
+        lp: &str,
+        ingest_time: Time,
+        accept_partial: bool,
+        precision: Precision,
+        no_sync: bool,
+    ) -> write_buffer::Result<BufferedWriteRequest> {
+        // This is a simplified implementation. A production version would need to handle
+        // partial writes and aggregate results from multiple shards/nodes.
+        let parsed_lines = self.parse_line_protocol(lp).map_err(|e| write_buffer::Error::from(anyhow::Error::from(e)))?;
+
+        let mut shard_writes: std::collections::HashMap<ShardId, Vec<String>> =
+            std::collections::HashMap::new();
+
+        for line in parsed_lines {
+            let tags_ref: Vec<(&str, &str)> = line
+                .tags
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+
+            let shard_id = self.shard_manager.route_write(
+                database.as_str(),
+                &line.measurement,
+                &tags_ref,
+            );
+
+            shard_writes
+                .entry(shard_id)
+                .or_default()
+                .push(line.raw_line);
+        }
+
+        let mut local_lp = String::new();
+
+        for (shard_id, lines) in shard_writes {
+            let lp_data = lines.join("\n");
+
+            if self.is_local_shard(shard_id).await.unwrap_or(false) {
+                local_lp.push_str(&lp_data);
+                local_lp.push('\n');
+            } else {
+                let batch = WriteBatch::new(
+                    database.to_string(),
+                    lp_data.as_bytes().to_vec(),
+                    0, // sequence number would be assigned by WAL
+                );
+
+                self.replicator
+                    .replicate_write(shard_id, batch, self.consistency_level)
+                    .await.map_err(|e| write_buffer::Error::from(anyhow::Error::from(e)))?;
+            }
+        }
+
+        if !local_lp.is_empty() {
+            self.local_buffer.write_lp(database, &local_lp, ingest_time, accept_partial, precision, no_sync).await
+        } else {
+            Ok(BufferedWriteRequest {
+                db_name: database,
+                invalid_lines: vec![],
+                line_count: lp.lines().count(),
+                field_count: 0, // Simplified
+                index_count: 0, // Simplified
+            })
+        }
+    }
+
+    fn catalog(&self) -> Arc<Catalog> {
+        self.local_buffer.catalog()
+    }
+
+    fn wal(&self) -> Arc<dyn Wal> {
+        self.local_buffer.wal()
+    }
+
+    fn parquet_files_filtered(&self, db_id: DbId, table_id: TableId, filter: &ChunkFilter<'_>) -> Vec<ParquetFile> {
+        self.local_buffer.parquet_files_filtered(db_id, table_id, filter)
+    }
+
+    fn watch_persisted_snapshots(&self) -> tokio::sync::watch::Receiver<Option<PersistedSnapshotVersion>> {
+        self.local_buffer.watch_persisted_snapshots()
+    }
+}
+
+impl ChunkContainer for ClusteredWriteBuffer {
+    fn get_table_chunks(
+        &self,
+        db_schema: Arc<DatabaseSchema>,
+        table_def: Arc<TableDefinition>,
+        filter: &ChunkFilter<'_>,
+        projection: Option<&Vec<usize>>,
+        ctx: &dyn datafusion::catalog::Session,
+    ) -> datafusion::error::Result<Vec<Arc<dyn iox_query::QueryChunk>>, datafusion::error::DataFusionError> {
+        self.local_buffer.get_table_chunks(db_schema, table_def, filter, projection, ctx)
+    }
+}
+
+#[async_trait]
+impl DistinctCacheManager for ClusteredWriteBuffer {
+    fn distinct_cache_provider(&self) -> Arc<influxdb3_cache::distinct_cache::DistinctCacheProvider> {
+        self.local_buffer.distinct_cache_provider()
+    }
+}
+
+#[async_trait]
+impl LastCacheManager for ClusteredWriteBuffer {
+    fn last_cache_provider(&self) -> Arc<influxdb3_cache::last_cache::LastCacheProvider> {
+        self.local_buffer.last_cache_provider()
+    }
+}
+
+impl WriteBuffer for ClusteredWriteBuffer {}

@@ -156,6 +156,16 @@ impl ShardManager {
             .cloned()
             .ok_or(Error::ShardNotFound { shard_id })
     }
+
+    /// Load shards for a database from the meta store into local cache
+    pub async fn load_shards_from_meta(&self, database_id: DbId) -> Result<()> {
+        let list = self.meta_store.list_shards(database_id).await.map_err(|e| Error::MetaStoreError { source: e.into() })?;
+        let mut shards = self.shards.write().await;
+        for s in list {
+            shards.insert(s.shard_id, s);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

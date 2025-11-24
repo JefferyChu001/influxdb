@@ -62,6 +62,7 @@ message WriteRequest {
     bytes data = 2;
     ConsistencyLevel consistency = 3;
     string database = 4;
+    bool forwarded = 5; // true if this write was forwarded to avoid re-forwarding
 }
 
 message WriteResponse {

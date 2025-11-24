@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+influxdb3_cluster = { path = "../influxdb3_cluster" }
 # Core Crates
 authz.workspace = true
 data_types.workspace = true

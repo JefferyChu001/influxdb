@@ -17,6 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+influxdb3_cluster = { path = "../influxdb3_cluster" }
 # Core Crates
 authz.workspace = true
 datafusion_util.workspace = true

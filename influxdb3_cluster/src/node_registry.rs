@@ -123,6 +123,17 @@ impl NodeRegistry {
         let nodes = self.nodes.read().await;
         nodes.values().cloned().collect()
     }
+
+    /// Sync local cache from meta store (load all nodes)
+    pub async fn sync_from_meta(&self) -> Result<()> {
+        let list = self.meta_store.list_nodes().await.map_err(|e| Error::MetaStoreError { source: e.into() })?;
+        let mut nodes = self.nodes.write().await;
+        nodes.clear();
+        for n in list {
+            nodes.insert(n.node_id, n);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

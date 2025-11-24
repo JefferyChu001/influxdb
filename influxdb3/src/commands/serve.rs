@@ -1037,7 +1037,79 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
     })
     .await;
 
-    let write_buffer: Arc<dyn WriteBuffer> = write_buffer_impl;
+    let mut write_buffer: Arc<dyn WriteBuffer> = write_buffer_impl;
+
+    // Cluster gRPC server (experimental): enable with CLUSTER_ENABLE=1
+    if std::env::var("CLUSTER_ENABLE").ok().as_deref() == Some("1") {
+        use std::net::SocketAddr;
+        use std::sync::Arc as StdArc;
+        let grpc_bind = std::env::var("CLUSTER_GRPC_BIND").unwrap_or_else(|_| "127.0.0.1:8087".to_string());
+        let bind_addr: SocketAddr = grpc_bind.parse().expect("valid CLUSTER_GRPC_BIND addr");
+
+        // Choose meta store: etcd if endpoints provided, else in-memory (not cross-process!)
+        let meta_store: StdArc<dyn influxdb3_cluster::meta_store::MetaStore> = if let Ok(eps) = std::env::var("CLUSTER_ETCD_ENDPOINTS") {
+            let endpoints: Vec<String> = eps.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            if !endpoints.is_empty() {
+                StdArc::new(influxdb3_cluster::meta_store::EtcdMetaStore::new(endpoints, "influxdb3".to_string()).await.expect("connect etcd"))
+            } else {
+                StdArc::new(influxdb3_cluster::meta_store::InMemoryMetaStore::new())
+            }
+        } else {
+            StdArc::new(influxdb3_cluster::meta_store::InMemoryMetaStore::new())
+        };
+
+        let node_registry = StdArc::new(influxdb3_cluster::node_registry::NodeRegistry::new(meta_store.clone()));
+        // Register this node into cluster meta (requires etcd for cross-process visibility)
+        if let Ok(node_id_s) = std::env::var("CLUSTER_NODE_ID") {
+            let node_id = node_id_s.parse::<u64>().expect("valid CLUSTER_NODE_ID");
+            let http_addr = config.http_bind_address.to_string();
+            let grpc_port = bind_addr.port();
+            let advertise_addr = std::env::var("CLUSTER_ADVERTISE_ADDR").unwrap_or_else(|_| http_addr);
+            let node = influxdb3_cluster::types::NodeInfo {
+                node_id: influxdb3_cluster::types::NodeId::new(node_id),
+                address: advertise_addr,
+                grpc_port: grpc_port as u16,
+                http_port: config.http_bind_address.port() as u16,
+                role: influxdb3_cluster::types::NodeRole::DataNode,
+                status: influxdb3_cluster::types::NodeStatus::Active,
+                capacity: influxdb3_cluster::types::NodeCapacity { cpu_cores: num_cpus::get(), memory_bytes: 0, disk_bytes: 0, current_shards: 0, max_shards: 0 },
+                last_heartbeat_nanos: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as i64,
+            };
+            if let Err(e) = node_registry.register_node(node).await {
+                warn!(error=?e, "failed to register node in cluster meta");
+            }
+        }
+
+        let shutdown_token = shutdown_manager.register();
+        let wb_clone = Arc::clone(&write_buffer);
+        let nr_clone = Arc::clone(&node_registry);
+        tokio::spawn(async move {
+            if let Err(e) = influxdb3_cluster::rpc::server::start_cluster_grpc(bind_addr, wb_clone, nr_clone, shutdown_token).await {
+                error!(error=%e, "cluster gRPC service failed");
+            }
+        });
+
+        let shard_count = std::env::var("CLUSTER_SHARD_COUNT").unwrap_or_else(|_| "16".to_string()).parse().expect("valid shard count");
+        let replication_factor = std::env::var("CLUSTER_REPLICATION_FACTOR").unwrap_or_else(|_| "1".to_string()).parse().expect("valid replication factor");
+        let shard_manager = Arc::new(influxdb3_cluster::shard_manager::ShardManager::new(shard_count, replication_factor, meta_store));
+
+        let consistency_level_str = std::env::var("CLUSTER_WRITE_CONSISTENCY").unwrap_or_else(|_| "quorum".to_string());
+        let consistency_level = match consistency_level_str.as_str() {
+            "one" => influxdb3_cluster::types::ConsistencyLevel::One,
+            "quorum" => influxdb3_cluster::types::ConsistencyLevel::Quorum,
+            "all" => influxdb3_cluster::types::ConsistencyLevel::All,
+            _ => panic!("invalid CLUSTER_WRITE_CONSISTENCY level"),
+        };
+
+        write_buffer = Arc::new(influxdb3_cluster::clustered_write_buffer::ClusteredWriteBuffer::new(
+            write_buffer,
+            shard_manager,
+            node_registry,
+            consistency_level,
+        ));
+
+        info!(%grpc_bind, "cluster gRPC service enabled");
+    }
 
     let common_state = CommonServerState::new(
         Arc::clone(&metrics),

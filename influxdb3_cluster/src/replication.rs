@@ -4,6 +4,7 @@
 
 use crate::error::{Error, Result};
 use crate::node_registry::NodeRegistry;
+use crate::rpc::client::ClusterRpcClient;
 use crate::shard_manager::ShardManager;
 use crate::types::{ConsistencyLevel, ShardId};
 use std::sync::Arc;
@@ -30,15 +31,20 @@ impl WriteBatch {
 #[derive(Debug)]
 pub struct WriteReplicator {
     shard_manager: Arc<ShardManager>,
-    #[allow(dead_code)]
     node_registry: Arc<NodeRegistry>,
+    rpc_client: Arc<ClusterRpcClient>,
 }
 
 impl WriteReplicator {
-    pub fn new(shard_manager: Arc<ShardManager>, node_registry: Arc<NodeRegistry>) -> Self {
+    pub fn new(
+        shard_manager: Arc<ShardManager>,
+        node_registry: Arc<NodeRegistry>,
+        rpc_client: Arc<ClusterRpcClient>,
+    ) -> Self {
         Self {
             shard_manager,
             node_registry,
+            rpc_client,
         }
     }
 
@@ -57,11 +63,21 @@ impl WriteReplicator {
     }
 
     /// Write to the leader replica only
-    async fn write_to_leader(&self, shard_id: ShardId, _write_batch: WriteBatch) -> Result<()> {
-        let _leader_id = self.shard_manager.get_shard_leader(shard_id).await?;
-        // In a real implementation, we would send the write via RPC
-        // For now, just return success
-        Ok(())
+    async fn write_to_leader(&self, shard_id: ShardId, write_batch: WriteBatch) -> Result<()> {
+        let leader_id = self.shard_manager.get_shard_leader(shard_id).await?;
+        let nodes = self.node_registry.list_nodes().await;
+        let leader_node = nodes.iter().find(|n| n.node_id == leader_id).ok_or_else(|| Error::InternalError {
+            message: format!("leader node {} not found in registry", leader_id)
+        })?;
+
+        let addr = format!("{}:{}", leader_node.address, leader_node.grpc_port);
+        self.rpc_client.write_to_node(
+            &addr,
+            shard_id.as_u64(),
+            &write_batch.database,
+            write_batch.data,
+            ConsistencyLevel::One,
+        ).await
     }
 
     /// Write with quorum consistency (majority of replicas must acknowledge)
@@ -150,7 +166,8 @@ mod tests {
             .await
             .unwrap();
 
-        let replicator = WriteReplicator::new(shard_manager, node_registry);
+        let rpc_client = Arc::new(ClusterRpcClient::new());
+        let replicator = WriteReplicator::new(shard_manager, node_registry, rpc_client);
         let batch = WriteBatch::new("test_db".to_string(), vec![1, 2, 3], 1);
 
         let result = replicator
