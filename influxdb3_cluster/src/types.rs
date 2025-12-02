@@ -1,5 +1,6 @@
 //! Core types for the cluster module
 
+use influxdb3_id::DbId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -67,25 +68,6 @@ impl From<u64> for ShardId {
     }
 }
 
-/// Database identifier
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct DbId(u64);
-
-impl DbId {
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-
-    pub fn as_u64(&self) -> u64 {
-        self.0
-    }
-}
-
-impl From<u64> for DbId {
-    fn from(id: u64) -> Self {
-        Self(id)
-    }
-}
 
 /// Table identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -1,7 +1,8 @@
 //! Metadata store abstraction for cluster state
 
 use crate::error::Result;
-use crate::types::{DbId, NodeId, NodeInfo, ShardId, ShardInfo};
+use crate::types::{NodeId, NodeInfo, ShardId, ShardInfo};
+use influxdb3_id::DbId;
 use async_trait::async_trait;
 
 /// Metadata store trait for persisting cluster state
@@ -140,7 +141,7 @@ impl EtcdMetaStore {
     }
 
     fn database_key(&self, db_id: DbId) -> String {
-        format!("{}/databases/{}", self.prefix, db_id.as_u64())
+        format!("{}/databases/{}", self.prefix, db_id.get())
     }
 }
 

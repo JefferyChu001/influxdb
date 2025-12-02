@@ -5,7 +5,8 @@ mod tests {
     use super::super::*;
     use crate::meta_store::InMemoryMetaStore;
     use crate::node_registry::NodeRegistry;
-    use crate::types::{DbId, NodeCapacity, NodeInfo, NodeRole, NodeStatus, ShardRange};
+    use crate::types::{NodeCapacity, NodeInfo, NodeRole, NodeStatus, ShardRange};
+use influxdb3_id::DbId;
     use std::sync::Arc;
 
     fn create_test_node(id: u64) -> NodeInfo {

@@ -16,6 +16,9 @@ service ClusterService {
     // Execute query on a node
     rpc Query(QueryRequest) returns (stream QueryResponse);
 
+    // Get table statistics for query optimization
+    rpc GetTableStatistics(TableStatisticsRequest) returns (TableStatisticsResponse);
+
     // Raft message passing
     rpc RaftMessage(RaftMessageRequest) returns (RaftMessageResponse);
 
@@ -77,12 +80,69 @@ message QueryRequest {
     string query = 2;
     repeated uint64 target_shards = 3;
     map<string, string> params = 4;
+    // For distributed query optimization
+    repeated string projection = 5;  // Column names to project
+    repeated FilterExpr filters = 6; // Predicates for pushdown
+    optional uint64 limit = 7;        // Limit for early termination
+    string table_name = 8;            // Target table name
 }
 
 message QueryResponse {
     bytes record_batch = 1;
     bool has_more = 2;
     string error = 3;
+}
+
+// Filter expression for predicate pushdown
+message FilterExpr {
+    FilterOp op = 1;
+    string column = 2;
+    LiteralValue value = 3;
+    repeated FilterExpr children = 4;  // For AND/OR expressions
+}
+
+enum FilterOp {
+    EQ = 0;           // Equal
+    NEQ = 1;          // Not equal
+    LT = 2;           // Less than
+    LTE = 3;          // Less than or equal
+    GT = 4;           // Greater than
+    GTE = 5;          // Greater than or equal
+    AND = 6;          // Logical AND
+    OR = 7;           // Logical OR
+    NOT = 8;          // Logical NOT
+    IS_NULL = 9;      // IS NULL
+    IS_NOT_NULL = 10; // IS NOT NULL
+    LIKE = 11;        // LIKE pattern
+}
+
+message LiteralValue {
+    oneof value {
+        int64 int_value = 1;
+        double float_value = 2;
+        string string_value = 3;
+        bool bool_value = 4;
+        int64 timestamp_value = 5;  // Nanoseconds since epoch
+    }
+}
+
+// Table statistics for query optimization
+message TableStatisticsRequest {
+    string database = 1;
+    string table_name = 2;
+}
+
+message TableStatisticsResponse {
+    uint64 row_count = 1;
+    uint64 size_bytes = 2;
+    map<string, ColumnStatistics> column_stats = 3;
+}
+
+message ColumnStatistics {
+    uint64 null_count = 1;
+    uint64 distinct_count = 2;
+    LiteralValue min_value = 3;
+    LiteralValue max_value = 4;
 }
 
 // Raft message

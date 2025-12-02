@@ -3,7 +3,8 @@
 use crate::error::{Error, Result};
 use crate::node_registry::NodeRegistry;
 use crate::shard_manager::ShardManager;
-use crate::types::{DbId, ShardId};
+use crate::types::ShardId;
+use influxdb3_id::DbId;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use std::sync::Arc;

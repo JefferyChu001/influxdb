@@ -24,7 +24,7 @@ pub use types::{
     NodeId, NodeInfo, NodeRole, NodeStatus, NodeCapacity,
     ShardId, ShardInfo, ShardRange, ShardStatus,
     ReplicaInfo, ReplicaRole, ReplicaStatus,
-    DbId, TableId,
+    TableId,
 };
 
 pub use error::{Error, Result};

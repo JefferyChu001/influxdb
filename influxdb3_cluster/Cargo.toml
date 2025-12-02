@@ -25,6 +25,12 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Time parsing
+chrono = "0.4"
+
 # Consensus and distributed coordination
 raft = "0.7"
 raft-proto = "0.7"

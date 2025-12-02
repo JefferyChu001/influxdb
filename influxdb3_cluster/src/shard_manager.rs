@@ -2,9 +2,10 @@
 
 use crate::error::{Error, Result};
 use crate::types::{
-    DbId, NodeId, ReplicaInfo, ReplicaRole, ReplicaStatus, ShardId, ShardInfo, ShardRange,
+    NodeId, ReplicaInfo, ReplicaRole, ReplicaStatus, ShardId, ShardInfo, ShardRange,
     ShardStatus,
 };
+use influxdb3_id::DbId;
 use crate::meta_store::MetaStore;
 use crate::node_registry::NodeRegistry;
 use std::collections::hash_map::DefaultHasher;

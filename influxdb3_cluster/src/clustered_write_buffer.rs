@@ -1,6 +1,6 @@
 //! Clustered write buffer that wraps the existing WriteBuffer with cluster functionality
 
-use crate::error::{self, Error, Result};
+use crate::error::{Error, Result};
 use crate::node_registry::NodeRegistry;
 use crate::replication::{WriteBatch, WriteReplicator};
 use crate::shard_manager::ShardManager;
@@ -16,6 +16,7 @@ use influxdb3_write::{
     ParquetFile, PersistedSnapshotVersion, Precision, WriteBuffer,
 };
 use iox_time::Time;
+use observability_deps::tracing::{debug, error, info};
 use std::sync::Arc;
 
 /// Clustered write buffer adds distributed write capabilities
@@ -137,14 +138,24 @@ impl Bufferer for ClusteredWriteBuffer {
         precision: Precision,
         no_sync: bool,
     ) -> write_buffer::Result<BufferedWriteRequest> {
+        info!("ClusteredWriteBuffer: Starting write_lp for database: {}, lp length: {}", database, lp.len());
+        debug!("ClusteredWriteBuffer: Line protocol data: {}", lp);
+
         // This is a simplified implementation. A production version would need to handle
         // partial writes and aggregate results from multiple shards/nodes.
-        let parsed_lines = self.parse_line_protocol(lp).map_err(|e| write_buffer::Error::from(anyhow::Error::from(e)))?;
+        let parsed_lines = self.parse_line_protocol(lp).map_err(|e| {
+            error!("ClusteredWriteBuffer: Failed to parse line protocol: {}", e);
+            write_buffer::Error::from(anyhow::Error::from(e))
+        })?;
+
+        info!("ClusteredWriteBuffer: Parsed {} lines", parsed_lines.len());
 
         let mut shard_writes: std::collections::HashMap<ShardId, Vec<String>> =
             std::collections::HashMap::new();
 
-        for line in parsed_lines {
+        for (i, line) in parsed_lines.iter().enumerate() {
+            debug!("ClusteredWriteBuffer: Processing line {}: measurement={}, tags={:?}", i, line.measurement, line.tags);
+
             let tags_ref: Vec<(&str, &str)> = line
                 .tags
                 .iter()
@@ -157,21 +168,40 @@ impl Bufferer for ClusteredWriteBuffer {
                 &tags_ref,
             );
 
+            debug!("ClusteredWriteBuffer: Routed to shard_id: {}", shard_id);
+
+            // Ensure shard exists before writing
+            if self.shard_manager.get_shard(shard_id).await.is_err() {
+                info!("ClusteredWriteBuffer: Creating new shard {}", shard_id);
+                let db = self.local_buffer.catalog().db_schema(database.as_str()).ok_or_else(|| {
+                    error!("ClusteredWriteBuffer: Database not found: {}", database);
+                    write_buffer::Error::DatabaseNotFound { db_name: database.to_string() }
+                })?;
+                self.shard_manager.create_shard(db.id, crate::types::ShardRange::Hash { start: 0, end: u64::MAX }, &self.node_registry).await.map_err(|e| {
+                    error!("ClusteredWriteBuffer: Failed to create shard: {}", e);
+                    write_buffer::Error::from(anyhow::Error::from(e))
+                })?;
+            }
+
             shard_writes
                 .entry(shard_id)
                 .or_default()
-                .push(line.raw_line);
+                .push(line.raw_line.clone());
         }
 
         let mut local_lp = String::new();
+        info!("ClusteredWriteBuffer: Processing {} shard writes", shard_writes.len());
 
         for (shard_id, lines) in shard_writes {
             let lp_data = lines.join("\n");
+            debug!("ClusteredWriteBuffer: Processing shard {} with {} lines", shard_id, lines.len());
 
             if self.is_local_shard(shard_id).await.unwrap_or(false) {
+                info!("ClusteredWriteBuffer: Writing to local shard {}", shard_id);
                 local_lp.push_str(&lp_data);
                 local_lp.push('\n');
             } else {
+                info!("ClusteredWriteBuffer: Replicating to remote shard {}", shard_id);
                 let batch = WriteBatch::new(
                     database.to_string(),
                     lp_data.as_bytes().to_vec(),
@@ -180,13 +210,18 @@ impl Bufferer for ClusteredWriteBuffer {
 
                 self.replicator
                     .replicate_write(shard_id, batch, self.consistency_level)
-                    .await.map_err(|e| write_buffer::Error::from(anyhow::Error::from(e)))?;
+                    .await.map_err(|e| {
+                        error!("ClusteredWriteBuffer: Failed to replicate write: {}", e);
+                        write_buffer::Error::from(anyhow::Error::from(e))
+                    })?;
             }
         }
 
         if !local_lp.is_empty() {
+            info!("ClusteredWriteBuffer: Writing {} bytes to local buffer", local_lp.len());
             self.local_buffer.write_lp(database, &local_lp, ingest_time, accept_partial, precision, no_sync).await
         } else {
+            info!("ClusteredWriteBuffer: No local writes, returning empty result");
             Ok(BufferedWriteRequest {
                 db_name: database,
                 invalid_lines: vec![],

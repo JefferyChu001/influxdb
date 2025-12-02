@@ -1,0 +1,2 @@
+idb3.004.lXÈ
+ö{"catalog_batch":{"Node":{"time_ns":1764658015236411000,"node_catalog_id":0,"node_id":"node2","ops":[{"RegisterNode":{"node_id":"node2","instance_id":"f5c6294f-b87c-4dfe-9c4d-f1c692ae82ea","registered_time_ns":1764658015236411000,"core_count":10,"mode":["Core"],"process_uuid":"e00fa3af-7802-434e-84a9-1fa7201c79d1","cli_params":"{\"http-bind\":\"127.0.0.1:8182\",\"object-store\":\"file\",\"data-dir\":\"./node2\",\"without-auth\":\"*******\",\"node-id\":\"node2\"}"}}]}},"sequence_number":12}

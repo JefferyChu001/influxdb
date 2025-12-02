@@ -1,0 +1,1 @@
+idb3.004.lv{"catalog_batch":{"Database":{"time_ns":1763980633610431000,"database_id":1,"database_name":"testdb","ops":[{"CreateDatabase":{"database_id":1,"database_name":"testdb","retention_period":null}}]}},"sequence_number":4}

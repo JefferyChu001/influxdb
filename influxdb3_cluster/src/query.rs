@@ -1,10 +1,11 @@
 //! Distributed query execution
 //!
 //! This module handles distributed query planning and execution.
-//! To be implemented in Phase 7-10.
 
 pub mod distributed_planner;
+pub mod federated_query;
 pub mod join;
 
-// Placeholder for query execution
+pub use federated_query::FederatedQueryExecutor;
+pub use federated_query::StandaloneFederatedExecutor;
 

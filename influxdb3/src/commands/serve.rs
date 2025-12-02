@@ -552,6 +552,63 @@ pub struct Config {
         action
     )]
     pub delete_grace_period: humantime::Duration,
+
+    /// Enable cluster mode
+    #[clap(long = "cluster-enable", env = "CLUSTER_ENABLE", action)]
+    pub cluster_enable: bool,
+
+    /// Cluster gRPC bind address
+    #[clap(
+        long = "cluster-grpc-bind",
+        env = "CLUSTER_GRPC_BIND",
+        default_value = "127.0.0.1:8087",
+        action
+    )]
+    pub cluster_grpc_bind: String,
+
+    /// Cluster node ID
+    #[clap(long = "cluster-node-id", env = "CLUSTER_NODE_ID", action)]
+    pub cluster_node_id: Option<u64>,
+
+    /// Cluster advertise address
+    #[clap(long = "cluster-advertise-addr", env = "CLUSTER_ADVERTISE_ADDR", action)]
+    pub cluster_advertise_addr: Option<String>,
+
+    /// Etcd endpoints for cluster coordination
+    #[clap(
+        long = "cluster-etcd-endpoints",
+        env = "CLUSTER_ETCD_ENDPOINTS",
+        default_value = "http://127.0.0.1:2379",
+        action
+    )]
+    pub cluster_etcd_endpoints: String,
+
+    /// Number of shards for data distribution
+    #[clap(
+        long = "cluster-shard-count",
+        env = "CLUSTER_SHARD_COUNT",
+        default_value = "16",
+        action
+    )]
+    pub cluster_shard_count: u64,
+
+    /// Replication factor for data redundancy
+    #[clap(
+        long = "cluster-replication-factor",
+        env = "CLUSTER_REPLICATION_FACTOR",
+        default_value = "1",
+        action
+    )]
+    pub cluster_replication_factor: u64,
+
+    /// Write consistency level
+    #[clap(
+        long = "cluster-write-consistency",
+        env = "CLUSTER_WRITE_CONSISTENCY",
+        default_value = "quorum",
+        action
+    )]
+    pub cluster_write_consistency: String,
 }
 
 #[derive(Clone, Debug, clap::Args)]
@@ -1037,36 +1094,23 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
     })
     .await;
 
-    let mut write_buffer: Arc<dyn WriteBuffer> = write_buffer_impl;
+    let write_buffer: Arc<dyn WriteBuffer> = if config.cluster_enable {
+        let bind_addr: std::net::SocketAddr = config.cluster_grpc_bind.parse().expect("valid cluster gRPC bind address");
 
-    // Cluster gRPC server (experimental): enable with CLUSTER_ENABLE=1
-    if std::env::var("CLUSTER_ENABLE").ok().as_deref() == Some("1") {
-        use std::net::SocketAddr;
-        use std::sync::Arc as StdArc;
-        let grpc_bind = std::env::var("CLUSTER_GRPC_BIND").unwrap_or_else(|_| "127.0.0.1:8087".to_string());
-        let bind_addr: SocketAddr = grpc_bind.parse().expect("valid CLUSTER_GRPC_BIND addr");
-
-        // Choose meta store: etcd if endpoints provided, else in-memory (not cross-process!)
-        let meta_store: StdArc<dyn influxdb3_cluster::meta_store::MetaStore> = if let Ok(eps) = std::env::var("CLUSTER_ETCD_ENDPOINTS") {
-            let endpoints: Vec<String> = eps.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-            if !endpoints.is_empty() {
-                StdArc::new(influxdb3_cluster::meta_store::EtcdMetaStore::new(endpoints, "influxdb3".to_string()).await.expect("connect etcd"))
-            } else {
-                StdArc::new(influxdb3_cluster::meta_store::InMemoryMetaStore::new())
-            }
+        let endpoints: Vec<String> = config.cluster_etcd_endpoints.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let meta_store: Arc<dyn influxdb3_cluster::meta_store::MetaStore> = if !endpoints.is_empty() {
+            Arc::new(influxdb3_cluster::meta_store::EtcdMetaStore::new(endpoints, "influxdb3".to_string()).await.expect("connect etcd"))
         } else {
-            StdArc::new(influxdb3_cluster::meta_store::InMemoryMetaStore::new())
+            Arc::new(influxdb3_cluster::meta_store::InMemoryMetaStore::new())
         };
 
-        let node_registry = StdArc::new(influxdb3_cluster::node_registry::NodeRegistry::new(meta_store.clone()));
-        // Register this node into cluster meta (requires etcd for cross-process visibility)
-        if let Ok(node_id_s) = std::env::var("CLUSTER_NODE_ID") {
-            let node_id = node_id_s.parse::<u64>().expect("valid CLUSTER_NODE_ID");
+        let node_registry = Arc::new(influxdb3_cluster::node_registry::NodeRegistry::new(meta_store.clone()));
+        if let Some(node_id_val) = config.cluster_node_id {
             let http_addr = config.http_bind_address.to_string();
             let grpc_port = bind_addr.port();
-            let advertise_addr = std::env::var("CLUSTER_ADVERTISE_ADDR").unwrap_or_else(|_| http_addr);
+            let advertise_addr = config.cluster_advertise_addr.unwrap_or_else(|| http_addr);
             let node = influxdb3_cluster::types::NodeInfo {
-                node_id: influxdb3_cluster::types::NodeId::new(node_id),
+                node_id: influxdb3_cluster::types::NodeId::new(node_id_val),
                 address: advertise_addr,
                 grpc_port: grpc_port as u16,
                 http_port: config.http_bind_address.port() as u16,
@@ -1080,8 +1124,10 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
             }
         }
 
+        let local_buffer = Arc::clone(&write_buffer_impl);
         let shutdown_token = shutdown_manager.register();
-        let wb_clone = Arc::clone(&write_buffer);
+        // Correctly clone the Arc and cast it to a trait object for the gRPC server.
+        let wb_clone = local_buffer.clone() as Arc<dyn WriteBuffer>;
         let nr_clone = Arc::clone(&node_registry);
         tokio::spawn(async move {
             if let Err(e) = influxdb3_cluster::rpc::server::start_cluster_grpc(bind_addr, wb_clone, nr_clone, shutdown_token).await {
@@ -1089,27 +1135,25 @@ pub async fn command(config: Config, user_params: HashMap<String, String>) -> Re
             }
         });
 
-        let shard_count = std::env::var("CLUSTER_SHARD_COUNT").unwrap_or_else(|_| "16".to_string()).parse().expect("valid shard count");
-        let replication_factor = std::env::var("CLUSTER_REPLICATION_FACTOR").unwrap_or_else(|_| "1".to_string()).parse().expect("valid replication factor");
-        let shard_manager = Arc::new(influxdb3_cluster::shard_manager::ShardManager::new(shard_count, replication_factor, meta_store));
+        let shard_manager = Arc::new(influxdb3_cluster::shard_manager::ShardManager::new(config.cluster_shard_count as usize, config.cluster_replication_factor as usize, meta_store));
 
-        let consistency_level_str = std::env::var("CLUSTER_WRITE_CONSISTENCY").unwrap_or_else(|_| "quorum".to_string());
-        let consistency_level = match consistency_level_str.as_str() {
+        let consistency_level = match config.cluster_write_consistency.as_str() {
             "one" => influxdb3_cluster::types::ConsistencyLevel::One,
             "quorum" => influxdb3_cluster::types::ConsistencyLevel::Quorum,
             "all" => influxdb3_cluster::types::ConsistencyLevel::All,
-            _ => panic!("invalid CLUSTER_WRITE_CONSISTENCY level"),
+            _ => panic!("invalid cluster write consistency level: {}", config.cluster_write_consistency),
         };
 
-        write_buffer = Arc::new(influxdb3_cluster::clustered_write_buffer::ClusteredWriteBuffer::new(
-            write_buffer,
+        info!(grpc_bind = %config.cluster_grpc_bind, "cluster mode enabled");
+        Arc::new(influxdb3_cluster::clustered_write_buffer::ClusteredWriteBuffer::new(
+            local_buffer as Arc<dyn WriteBuffer>,
             shard_manager,
             node_registry,
             consistency_level,
-        ));
-
-        info!(%grpc_bind, "cluster gRPC service enabled");
-    }
+        ))
+    } else {
+        write_buffer_impl
+    };
 
     let common_state = CommonServerState::new(
         Arc::clone(&metrics),

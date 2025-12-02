@@ -125,7 +125,8 @@ impl WriteReplicator {
 mod tests {
     use super::*;
     use crate::meta_store::InMemoryMetaStore;
-    use crate::types::{DbId, NodeCapacity, NodeInfo, NodeRole, NodeStatus, ShardRange};
+    use crate::types::{NodeCapacity, NodeInfo, NodeRole, NodeStatus, ShardRange};
+    use influxdb3_id::DbId;
 
     fn create_test_node(id: u64) -> NodeInfo {
         NodeInfo {

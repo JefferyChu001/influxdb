@@ -1,5 +1,6 @@
 //! module for query executor
 mod query_planner;
+pub mod distributed;
 
 use crate::query_planner::Planner;
 use arrow::array::{ArrayRef, Int64Builder, StringBuilder, StructArray};

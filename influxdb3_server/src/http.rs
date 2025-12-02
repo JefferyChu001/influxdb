@@ -868,14 +868,18 @@ impl HttpApi {
     }
 
     async fn query_sql(&self, req: Request) -> Result<Response> {
-        let QueryRequest {
-            database,
-            query_str,
-            format,
-            params,
-        } = self.extract_query_request::<String>(req).await?;
+        #[derive(Deserialize)]
+        struct SqlQueryRequest {
+            query: String,
+            db: String,
+        }
 
-        info!(%database, %query_str, ?format, "handling query_sql");
+        let format = QueryFormat::try_from_headers(req.headers())?;
+        let params: SqlQueryRequest = self.read_body_json(req).await?;
+        let db = params.db;
+        let query = params.query;
+
+        info!(%db, %query, ?format, "handling query_sql");
 
         let span_ctx = Some(SpanContext::new_with_optional_collector(
             self.common_state.trace_collector(),
@@ -883,7 +887,7 @@ impl HttpApi {
 
         let stream = self
             .query_executor
-            .query_sql(&database, &query_str, params, span_ctx, None)
+            .query_sql(&db, &query, None, span_ctx, None)
             .await?;
 
         ResponseBuilder::new()

@@ -3,7 +3,13 @@
 use crate::error::{Error, Result};
 use crate::node_registry::NodeRegistry;
 use crate::proto::cluster_service_server::{ClusterService, ClusterServiceServer};
-use crate::proto::{HeartbeatRequest, HeartbeatResponse, RegisterNodeRequest, RegisterNodeResponse, WriteRequest, WriteResponse, QueryRequest, QueryResponse, RaftMessageRequest, RaftMessageResponse, BroadcastDataRequest, BroadcastDataResponse, LocalJoinRequest, LocalJoinResponse, PartitionJoinRequest, PartitionJoinResponse};
+use crate::proto::{
+    HeartbeatRequest, HeartbeatResponse, RegisterNodeRequest, RegisterNodeResponse,
+    WriteRequest, WriteResponse, QueryRequest, QueryResponse, RaftMessageRequest,
+    RaftMessageResponse, BroadcastDataRequest, BroadcastDataResponse, LocalJoinRequest,
+    LocalJoinResponse, PartitionJoinRequest, PartitionJoinResponse, TableStatisticsRequest,
+    TableStatisticsResponse,
+};
 use crate::types::{NodeCapacity, NodeId, NodeInfo, NodeRole, NodeStatus};
 use influxdb3_write::{Precision, WriteBuffer};
 use iox_time::Time;
@@ -76,6 +82,19 @@ impl ClusterService for ClusterServiceImpl {
     async fn query(&self, _request: Request<QueryRequest>) -> Result<Response<Self::QueryStream>, Status> {
         let (_tx, rx) = mpsc::channel(1);
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn get_table_statistics(
+        &self,
+        _request: Request<TableStatisticsRequest>,
+    ) -> Result<Response<TableStatisticsResponse>, Status> {
+        // TODO: Implement actual table statistics collection
+        // For now, return empty/default statistics
+        Ok(Response::new(TableStatisticsResponse {
+            row_count: 0,
+            size_bytes: 0,
+            column_stats: std::collections::HashMap::new(),
+        }))
     }
 
     async fn raft_message(&self, _request: Request<RaftMessageRequest>) -> Result<Response<RaftMessageResponse>, Status> {
