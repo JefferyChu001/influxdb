@@ -3654,6 +3654,7 @@ dependencies = [
  "observability_deps",
  "parquet_file",
  "pretty_assertions",
+ "reqwest 0.12.24",
  "rstest",
  "schema",
  "serde_json",

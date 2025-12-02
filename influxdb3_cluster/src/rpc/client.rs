@@ -92,9 +92,6 @@ impl ClusterRpcClient {
             message: format!("Failed to read response: {}", e),
         })?;
 
-        println!("🔍 Remote query to node {}: {}", node_id.as_u64(), query);
-        println!("📥 Response JSON: {}", json_text);
-
         // Parse JSON to RecordBatch
         // The response is a JSON array of objects
         let json_value: serde_json::Value =
@@ -113,7 +110,6 @@ impl ClusterRpcClient {
 
         // Convert JSON to RecordBatch
         let record_batch = self.json_to_record_batch(&json_text)?;
-        println!("📊 RecordBatch schema: {:?}", record_batch.schema());
 
         // Create a single-item stream
         let stream = futures::stream::once(async move { Ok(record_batch) });
@@ -137,25 +133,40 @@ impl ClusterRpcClient {
             });
         }
 
-        // Infer schema from first row
-        let first_row = &rows[0];
-        let obj = first_row.as_object().ok_or_else(|| Error::InternalError {
-            message: "Expected JSON object".to_string(),
-        })?;
+        // Scan ALL rows to collect all possible column names
+        // (some rows might have NULL values for certain columns, which don't appear in JSON)
+        let mut column_name_set = std::collections::BTreeSet::new();
+        let mut column_types = std::collections::HashMap::new();
+
+        for row in &rows {
+            let obj = row.as_object().ok_or_else(|| Error::InternalError {
+                message: "Expected JSON object".to_string(),
+            })?;
+
+            for (key, value) in obj.iter() {
+                column_name_set.insert(key.clone());
+
+                // Infer data type (use the first non-null value we see)
+                if !column_types.contains_key(key) {
+                    let data_type = match value {
+                        serde_json::Value::Number(_) => DataType::Float64,
+                        serde_json::Value::String(s) if s.contains('T') && s.contains(':') => {
+                            DataType::Timestamp(TimeUnit::Nanosecond, None)
+                        }
+                        _ => DataType::Utf8,
+                    };
+                    column_types.insert(key.clone(), data_type);
+                }
+            }
+        }
+
+        // Convert to sorted vector for deterministic ordering
+        let column_names: Vec<String> = column_name_set.into_iter().collect();
 
         let mut fields = Vec::new();
-        let mut column_names: Vec<String> = Vec::new();
-
-        for (key, value) in obj.iter() {
-            let data_type = match value {
-                serde_json::Value::Number(_) => DataType::Float64,
-                serde_json::Value::String(s) if s.contains('T') && s.contains(':') => {
-                    DataType::Timestamp(TimeUnit::Nanosecond, None)
-                }
-                _ => DataType::Utf8,
-            };
+        for key in &column_names {
+            let data_type = column_types.get(key).cloned().unwrap_or(DataType::Utf8);
             fields.push(Field::new(key, data_type, true));
-            column_names.push(key.clone());
         }
 
         let schema = Arc::new(Schema::new(fields));

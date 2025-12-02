@@ -92,6 +92,38 @@ impl RemoteTableScanExec {
         }
     }
 
+    /// Reorder columns in a RecordBatch to match the expected schema
+    fn reorder_batch_columns(
+        batch: RecordBatch,
+        expected_schema: &SchemaRef,
+    ) -> DataFusionResult<RecordBatch> {
+        // If schemas already match, return as-is
+        if batch.schema().as_ref() == expected_schema.as_ref() {
+            return Ok(batch);
+        }
+
+        // Build a mapping from expected column names to actual column indices
+        let mut columns = Vec::new();
+        for expected_field in expected_schema.fields() {
+            let column_name = expected_field.name();
+
+            // Find this column in the actual batch
+            let col_index = batch.schema().index_of(column_name).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Expected column '{}' not found in result batch: {}",
+                    column_name, e
+                ))
+            })?;
+
+            columns.push(batch.column(col_index).clone());
+        }
+
+        // Create a new RecordBatch with reordered columns
+        RecordBatch::try_new(expected_schema.clone(), columns).map_err(|e| {
+            DataFusionError::ArrowError(Box::new(e), None)
+        })
+    }
+
     /// Build the SQL query for the remote node
     fn build_query(&self) -> DataFusionResult<String> {
         // Build SELECT clause with projection
@@ -235,12 +267,15 @@ impl ExecutionPlan for RemoteTableScanExec {
         tokio::spawn(async move {
             // Note: We pass output_schema instead of the full schema because the SQL
             // query already includes the projection in the SELECT clause
-            match Self::execute_remote_query(node_id, database, query, output_schema_for_task, rpc_client).await {
+            match Self::execute_remote_query(node_id, database, query, output_schema_for_task.clone(), rpc_client).await {
                 Ok(mut stream) => {
                     while let Some(batch_result) = stream.next().await {
-                        // No need to apply projection here - the SQL query already did it
-                        // Just forward the results as-is
-                        if tx.send(batch_result).await.is_err() {
+                        // Reorder columns to match expected schema if needed
+                        let reordered_result = batch_result.and_then(|batch| {
+                            Self::reorder_batch_columns(batch, &output_schema_for_task)
+                        });
+
+                        if tx.send(reordered_result).await.is_err() {
                             // Receiver dropped, stop sending
                             break;
                         }
