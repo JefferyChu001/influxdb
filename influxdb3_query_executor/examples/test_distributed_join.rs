@@ -169,10 +169,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("📉 查询结果: {} 行", result_rows);
                     }
                     println!();
-                    println!("结果 (前10行):");
+                    println!("结果 (前5行):");
                     if !batches.is_empty() {
-                        let limited_batches: Vec<_> = batches.iter().take(1).cloned().collect();
-                        arrow::util::pretty::print_batches(&limited_batches)?;
+                        // 只显示前5行
+                        let first_batch = &batches[0];
+                        let row_count = first_batch.num_rows().min(5);
+                        let limited_batch = first_batch.slice(0, row_count);
+                        arrow::util::pretty::print_batches(&[limited_batch])?;
                     }
                 }
                 Err(e) => {
@@ -204,10 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("📌 谓词下推优化效果:");
     println!("  1. 从节点1查询: SELECT host, region, value, load FROM cpu WHERE host = 'server01'");
-    println!("     数据缩减: {} 行 -> ~20 行", cpu_total);
     println!("  2. 从节点2查询: SELECT host, total, used, available FROM mem WHERE host = 'server01'");
-    println!("     数据缩减: {} 行 -> ~20 行", mem_total);
-    println!("  3. 在本地执行 JOIN (仅处理 ~20 行，而不是 {} 行!)", cpu_total + mem_total);
+    println!("  3. 在本地执行 JOIN");
     println!();
 
     match ctx.sql(query2).await {
@@ -218,9 +219,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", df.logical_plan());
             println!();
 
+            // 并行查询统计信息和执行 JOIN
             println!("执行中...");
             let start_time = std::time::Instant::now();
-            match df.collect().await {
+
+            // 使用 tokio::join! 并行执行统计查询和 JOIN
+            let (cpu_filtered_result, mem_filtered_result, join_result) = tokio::join!(
+                async {
+                    let response = reqwest::Client::new()
+                        .post("http://127.0.0.1:8181/api/v3/query_sql")
+                        .json(&serde_json::json!({
+                            "db": "testdb",
+                            "query": "SELECT COUNT(*) as count FROM cpu WHERE host = 'server01'"
+                        }))
+                        .send()
+                        .await
+                        .ok()?;
+                    let text = response.text().await.ok()?;
+                    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+                    json.as_array()?.first()?.get("count")?.as_i64()
+                },
+                async {
+                    let response = reqwest::Client::new()
+                        .post("http://127.0.0.1:8182/api/v3/query_sql")
+                        .json(&serde_json::json!({
+                            "db": "testdb",
+                            "query": "SELECT COUNT(*) as count FROM mem WHERE host = 'server01'"
+                        }))
+                        .send()
+                        .await
+                        .ok()?;
+                    let text = response.text().await.ok()?;
+                    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+                    json.as_array()?.first()?.get("count")?.as_i64()
+                },
+                df.collect()
+            );
+
+            let cpu_filtered = cpu_filtered_result.unwrap_or(0);
+            let mem_filtered = mem_filtered_result.unwrap_or(0);
+
+            match join_result {
                 Ok(batches) => {
                     let elapsed = start_time.elapsed();
                     let result_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -230,21 +269,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  • 查询耗时: {:.2} ms", elapsed.as_secs_f64() * 1000.0);
                     println!("  • CPU 表原始数据: {} 行", cpu_total);
                     println!("  • MEM 表原始数据: {} 行", mem_total);
-                    println!("  • 谓词下推后每表: ~20 行");
+                    println!("  • 谓词下推后 CPU: {} 行 ({:.1}% 缩减)",
+                        cpu_filtered,
+                        (1.0 - cpu_filtered as f64 / cpu_total as f64) * 100.0);
+                    println!("  • 谓词下推后 MEM: {} 行 ({:.1}% 缩减)",
+                        mem_filtered,
+                        (1.0 - mem_filtered as f64 / mem_total as f64) * 100.0);
                     println!("  • JOIN 结果: {} 行", result_rows);
                     if cpu_total > 0 && mem_total > 0 {
-                        let reduction = (1.0 - (40.0 / (cpu_total + mem_total) as f64)) * 100.0;
-                        println!("  • 数据传输缩减率: {:.1}% (传输 40 行 vs 原始 {} 行)",
-                            reduction, cpu_total + mem_total);
+                        let total_transmitted = cpu_filtered + mem_filtered;
+                        let reduction = (1.0 - (total_transmitted as f64 / (cpu_total + mem_total) as f64)) * 100.0;
+                        println!("  • 数据传输总缩减: {:.1}% (传输 {} 行 vs 原始 {} 行)",
+                            reduction, total_transmitted, cpu_total + mem_total);
                     }
                     println!();
-                    println!("结果 (前10行):");
+                    println!("结果 (前5行):");
                     if !batches.is_empty() {
-                        let limited_batches: Vec<_> = batches.iter().take(1).cloned().collect();
-                        arrow::util::pretty::print_batches(&limited_batches)?;
+                        // 只显示前5行
+                        let first_batch = &batches[0];
+                        let row_count = first_batch.num_rows().min(5);
+                        let limited_batch = first_batch.slice(0, row_count);
+                        arrow::util::pretty::print_batches(&[limited_batch])?;
                     }
-                    println!();
-                    println!("✓✓✓ 分布式 JOIN 测试成功！ ✓✓✓");
                 }
                 Err(e) => {
                     println!("✗ 查询执行失败: {}", e);
@@ -308,7 +354,191 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     println!("========================================");
-    println!("测试完成");
+    println!("测试 4: 多条件过滤 + JOIN");
+    println!("========================================");
+    println!();
+
+    let query4 = "SELECT c.host, c.region, c.value as cpu_usage, c.load as cpu_load, \
+                         m.total as mem_total, m.used as mem_used \
+                  FROM cpu c JOIN mem m ON c.host = m.host \
+                  WHERE c.region = 'us-east' AND c.value > 50.0 AND m.used > 30.0 \
+                  ORDER BY c.value DESC \
+                  LIMIT 10";
+
+    println!("SQL:");
+    println!("  SELECT c.host, c.region, c.value as cpu_usage, c.load as cpu_load,");
+    println!("         m.total as mem_total, m.used as mem_used");
+    println!("  FROM cpu c JOIN mem m ON c.host = m.host");
+    println!("  WHERE c.region = 'us-east' AND c.value > 50.0 AND m.used > 30.0");
+    println!("  ORDER BY c.value DESC");
+    println!("  LIMIT 10");
+    println!();
+    println!("📌 这个查询展示:");
+    println!("  1. 多条件谓词下推 (region, value, used)");
+    println!("  2. 跨节点 JOIN");
+    println!("  3. 排序和限制");
+    println!();
+
+    match ctx.sql(query4).await {
+        Ok(df) => {
+            println!("执行中...");
+            let start_time = std::time::Instant::now();
+            match df.collect().await {
+                Ok(batches) => {
+                    let elapsed = start_time.elapsed();
+                    println!("✓ 查询成功!");
+                    println!("⏱️  查询耗时: {:.2} ms", elapsed.as_secs_f64() * 1000.0);
+                    println!();
+                    println!("结果 (前5行):");
+                    if !batches.is_empty() {
+                        let first_batch = &batches[0];
+                        let row_count = first_batch.num_rows().min(5);
+                        let limited_batch = first_batch.slice(0, row_count);
+                        arrow::util::pretty::print_batches(&[limited_batch])?;
+                    }
+                }
+                Err(e) => {
+                    println!("✗ 查询执行失败: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("✗ 查询规划失败: {}", e);
+        }
+    }
+
+    println!();
+    println!("========================================");
+    println!("测试 5: 多表 JOIN + 窗口函数模拟");
+    println!("========================================");
+    println!();
+
+    let query5 = "SELECT c.host, c.region, \
+                         AVG(c.value) as avg_cpu, \
+                         MAX(c.load) as max_load, \
+                         AVG(m.used) as avg_mem_used, \
+                         MAX(m.used) as max_mem_used, \
+                         COUNT(*) as sample_count \
+                  FROM cpu c JOIN mem m ON c.host = m.host \
+                  WHERE c.region IN ('us-east', 'us-west') \
+                  GROUP BY c.host, c.region \
+                  HAVING AVG(c.value) > 40.0 \
+                  ORDER BY avg_cpu DESC \
+                  LIMIT 10";
+
+    println!("SQL:");
+    println!("  SELECT c.host, c.region,");
+    println!("         AVG(c.value) as avg_cpu, MAX(c.load) as max_load,");
+    println!("         AVG(m.used) as avg_mem_used, MAX(m.used) as max_mem_used,");
+    println!("         COUNT(*) as sample_count");
+    println!("  FROM cpu c JOIN mem m ON c.host = m.host");
+    println!("  WHERE c.region IN ('us-east', 'us-west')");
+    println!("  GROUP BY c.host, c.region");
+    println!("  HAVING AVG(c.value) > 40.0");
+    println!("  ORDER BY avg_cpu DESC");
+    println!("  LIMIT 10");
+    println!();
+    println!("📌 这个查询展示:");
+    println!("  1. IN 条件谓词下推");
+    println!("  2. 多个聚合函数 (AVG, MAX, COUNT)");
+    println!("  3. HAVING 过滤");
+    println!("  4. GROUP BY 多列");
+    println!();
+
+    match ctx.sql(query5).await {
+        Ok(df) => {
+            println!("执行中...");
+            let start_time = std::time::Instant::now();
+            match df.collect().await {
+                Ok(batches) => {
+                    let elapsed = start_time.elapsed();
+                    println!("✓ 查询成功!");
+                    println!("⏱️  查询耗时: {:.2} ms", elapsed.as_secs_f64() * 1000.0);
+                    println!();
+                    println!("结果 (前5行):");
+                    if !batches.is_empty() {
+                        let first_batch = &batches[0];
+                        let row_count = first_batch.num_rows().min(5);
+                        let limited_batch = first_batch.slice(0, row_count);
+                        arrow::util::pretty::print_batches(&[limited_batch])?;
+                    }
+                }
+                Err(e) => {
+                    println!("✗ 查询执行失败: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("✗ 查询规划失败: {}", e);
+        }
+    }
+
+    println!();
+    println!("========================================");
+    println!("测试 6: 子查询 + JOIN");
+    println!("========================================");
+    println!();
+
+    let query6 = "SELECT high_cpu.host, high_cpu.region, high_cpu.avg_cpu, m.used as mem_used \
+                  FROM (SELECT host, region, AVG(value) as avg_cpu \
+                        FROM cpu \
+                        WHERE region = 'us-east' \
+                        GROUP BY host, region \
+                        HAVING AVG(value) > 50.0) AS high_cpu \
+                  JOIN mem m ON high_cpu.host = m.host \
+                  ORDER BY high_cpu.avg_cpu DESC \
+                  LIMIT 10";
+
+    println!("SQL:");
+    println!("  SELECT high_cpu.host, high_cpu.region, high_cpu.avg_cpu, m.used");
+    println!("  FROM (SELECT host, region, AVG(value) as avg_cpu");
+    println!("        FROM cpu");
+    println!("        WHERE region = 'us-east'");
+    println!("        GROUP BY host, region");
+    println!("        HAVING AVG(value) > 50.0) AS high_cpu");
+    println!("  JOIN mem m ON high_cpu.host = m.host");
+    println!("  ORDER BY high_cpu.avg_cpu DESC");
+    println!("  LIMIT 10");
+    println!();
+    println!("📌 这个查询展示:");
+    println!("  1. 子查询优化");
+    println!("  2. 聚合后的 JOIN");
+    println!("  3. 复杂的查询执行计划");
+    println!();
+
+    match ctx.sql(query6).await {
+        Ok(df) => {
+            println!("执行中...");
+            let start_time = std::time::Instant::now();
+            match df.collect().await {
+                Ok(batches) => {
+                    let elapsed = start_time.elapsed();
+                    let result_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+                    println!("✓ 查询成功!");
+                    println!("⏱️  查询耗时: {:.2} ms", elapsed.as_secs_f64() * 1000.0);
+                    println!("📊 结果行数: {}", result_rows);
+                    println!();
+                    println!("结果 (前5行):");
+                    if !batches.is_empty() {
+                        let first_batch = &batches[0];
+                        let row_count = first_batch.num_rows().min(5);
+                        let limited_batch = first_batch.slice(0, row_count);
+                        arrow::util::pretty::print_batches(&[limited_batch])?;
+                    }
+                }
+                Err(e) => {
+                    println!("✗ 查询执行失败: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("✗ 查询规划失败: {}", e);
+        }
+    }
+
+    println!();
+    println!("========================================");
+    println!("✓✓✓ 所有分布式查询测试完成！ ✓✓✓");
     println!("========================================");
 
     Ok(())

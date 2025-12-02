@@ -117,11 +117,12 @@ impl ClusterRpcClient {
         Ok(Box::pin(stream))
     }
 
-    /// Convert JSON array to RecordBatch
+    /// Convert JSON array to RecordBatch using Arrow's built-in JSON reader
     fn json_to_record_batch(&self, json_text: &str) -> Result<RecordBatch> {
-        use arrow::array::{Float64Array, StringArray, TimestampNanosecondArray};
         use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+        use std::io::Cursor;
 
+        // Parse the JSON array
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(json_text).map_err(|e| Error::InternalError {
                 message: format!("Failed to parse JSON: {}", e),
@@ -133,106 +134,47 @@ impl ClusterRpcClient {
             });
         }
 
-        // Scan ALL rows to collect all possible column names
-        // (some rows might have NULL values for certain columns, which don't appear in JSON)
-        let mut column_name_set = std::collections::BTreeSet::new();
-        let mut column_types = std::collections::HashMap::new();
-
+        // Convert JSON array to newline-delimited JSON (required by Arrow's JSON reader)
+        let mut ndjson = String::new();
         for row in &rows {
-            let obj = row.as_object().ok_or_else(|| Error::InternalError {
-                message: "Expected JSON object".to_string(),
+            let row_str = serde_json::to_string(row).map_err(|e| Error::InternalError {
+                message: format!("Failed to serialize row: {}", e),
+            })?;
+            ndjson.push_str(&row_str);
+            ndjson.push('\n');
+        }
+
+        // Use Arrow's JSON schema inference (only scan first 100 rows for performance)
+        let mut cursor = Cursor::new(ndjson.as_bytes());
+        let (inferred_schema, _) = arrow::json::reader::infer_json_schema(&mut cursor, Some(100))
+            .map_err(|e| Error::InternalError {
+                message: format!("Failed to infer schema: {}", e),
             })?;
 
-            for (key, value) in obj.iter() {
-                column_name_set.insert(key.clone());
-
-                // Infer data type (use the first non-null value we see)
-                if !column_types.contains_key(key) {
-                    let data_type = match value {
-                        serde_json::Value::Number(_) => DataType::Float64,
-                        serde_json::Value::String(s) if s.contains('T') && s.contains(':') => {
-                            DataType::Timestamp(TimeUnit::Nanosecond, None)
-                        }
-                        _ => DataType::Utf8,
-                    };
-                    column_types.insert(key.clone(), data_type);
-                }
-            }
-        }
-
-        // Convert to sorted vector for deterministic ordering
-        let column_names: Vec<String> = column_name_set.into_iter().collect();
-
-        let mut fields = Vec::new();
-        for key in &column_names {
-            let data_type = column_types.get(key).cloned().unwrap_or(DataType::Utf8);
-            fields.push(Field::new(key, data_type, true));
-        }
-
+        // Sort fields by name for deterministic ordering
+        let mut fields: Vec<_> = inferred_schema.fields().iter().cloned().collect();
+        fields.sort_by(|a, b| a.name().cmp(b.name()));
         let schema = Arc::new(Schema::new(fields));
 
-        // Build columns
-        let mut columns: Vec<Arc<dyn arrow::array::Array>> = Vec::new();
+        // Use Arrow's JSON reader for efficient parsing
+        cursor.set_position(0);
+        let mut reader = arrow::json::ReaderBuilder::new(schema.clone())
+            .build(cursor)
+            .map_err(|e| Error::InternalError {
+                message: format!("Failed to create JSON reader: {}", e),
+            })?;
 
-        for col_name in &column_names {
-            let field = schema
-                .field_with_name(col_name)
-                .map_err(|e| Error::InternalError {
-                    message: format!("Field not found: {}", e),
-                })?;
+        // Read the batch
+        let batch = reader
+            .next()
+            .ok_or_else(|| Error::InternalError {
+                message: "No batch returned from JSON reader".to_string(),
+            })?
+            .map_err(|e| Error::InternalError {
+                message: format!("Failed to read JSON batch: {}", e),
+            })?;
 
-            let array: Arc<dyn arrow::array::Array> = match field.data_type() {
-                DataType::Float64 => {
-                    let values: Vec<Option<f64>> = rows
-                        .iter()
-                        .map(|row| row.get(col_name).and_then(|v| v.as_f64()))
-                        .collect();
-                    Arc::new(Float64Array::from(values))
-                }
-                DataType::Utf8 => {
-                    let values: Vec<Option<&str>> = rows
-                        .iter()
-                        .map(|row| row.get(col_name).and_then(|v| v.as_str()))
-                        .collect();
-                    Arc::new(StringArray::from(values))
-                }
-                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                    let values: Vec<Option<i64>> = rows
-                        .iter()
-                        .map(|row| {
-                            row.get(col_name).and_then(|v| {
-                                v.as_str().and_then(|s| {
-                                    chrono::DateTime::parse_from_rfc3339(s)
-                                        .ok()
-                                        .map(|dt| dt.timestamp_nanos_opt().unwrap_or(0))
-                                })
-                            })
-                        })
-                        .collect();
-                    Arc::new(TimestampNanosecondArray::from(values))
-                }
-                _ => {
-                    let values: Vec<Option<String>> = rows
-                        .iter()
-                        .map(|row| {
-                            row.get(col_name)
-                                .map(|v| v.to_string().trim_matches('"').to_string())
-                        })
-                        .collect();
-                    Arc::new(StringArray::from(
-                        values
-                            .iter()
-                            .map(|o| o.as_deref())
-                            .collect::<Vec<Option<&str>>>(),
-                    ))
-                }
-            };
-            columns.push(array);
-        }
-
-        RecordBatch::try_new(schema, columns).map_err(|e| Error::InternalError {
-            message: format!("Failed to create RecordBatch: {}", e),
-        })
+        Ok(batch)
     }
 }
 
