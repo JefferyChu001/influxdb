@@ -76,6 +76,9 @@ pub trait MetaService: Send + Sync {
 
     /// Get all regions on a node
     async fn get_node_regions(&self, node_id: NodeId) -> Result<Vec<RegionId>>;
+
+    /// Register a region (for testing)
+    async fn register_region(&self, region: RegionMeta) -> Result<()>;
 }
 
 pub type MetaServiceRef = Arc<dyn MetaService>;
@@ -181,6 +184,12 @@ impl MetaService for InMemoryMetaService {
             .filter(|r| r.node_id == node_id)
             .map(|r| r.id)
             .collect())
+    }
+
+    async fn register_region(&self, region: RegionMeta) -> Result<()> {
+        let mut regions = self.regions.write();
+        regions.insert(region.id, region);
+        Ok(())
     }
 }
 

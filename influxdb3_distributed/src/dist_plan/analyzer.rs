@@ -95,14 +95,14 @@ impl AnalyzerRule for DistPlannerAnalyzer {
 
 impl DistPlannerAnalyzer {
     /// Try to push down as many operations as possible
-    fn try_push_down(&self, plan: LogicalPlan) -> DfResult<LogicalPlan> {
+    pub fn try_push_down(&self, plan: LogicalPlan) -> DfResult<LogicalPlan> {
         let mut rewriter = PushDownRewriter::new();
         let result = plan.rewrite(&mut rewriter)?.data;
         Ok(result)
     }
 
     /// Fallback: only push down table scans
-    fn use_fallback(&self, plan: LogicalPlan) -> DfResult<LogicalPlan> {
+    pub fn use_fallback(&self, plan: LogicalPlan) -> DfResult<LogicalPlan> {
         let mut rewriter = FallbackRewriter::new();
         let result = plan.rewrite(&mut rewriter)?.data;
         Ok(result)

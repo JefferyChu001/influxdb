@@ -122,7 +122,7 @@ impl DistributedPlanner {
     }
 
     /// Extract table names from logical plan
-    fn extract_tables(&self, plan: &LogicalPlan) -> Result<Vec<String>> {
+    pub fn extract_tables(&self, plan: &LogicalPlan) -> Result<Vec<String>> {
         let mut tables = Vec::new();
         self.extract_tables_recursive(plan, &mut tables)?;
         Ok(tables)
