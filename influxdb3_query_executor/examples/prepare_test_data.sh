@@ -25,17 +25,17 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}Step 1: 删除旧数据库${NC}"
-echo "删除节点1的数据库..."
-curl -s -X DELETE "http://127.0.0.1:${NODE1_PORT}/api/v3/configure/db/${DB_NAME}" > /dev/null 2>&1 || true
-echo "删除节点2的数据库..."
-curl -s -X DELETE "http://127.0.0.1:${NODE2_PORT}/api/v3/configure/db/${DB_NAME}" > /dev/null 2>&1 || true
-echo "删除节点3的数据库..."
-curl -s -X DELETE "http://127.0.0.1:${NODE3_PORT}/api/v3/configure/db/${DB_NAME}" > /dev/null 2>&1 || true
-echo -e "${GREEN}✓ 旧数据库已删除${NC}"
-echo ""
+# echo -e "${BLUE}Step 1: 删除旧数据库${NC}"
+# echo "删除节点1的数据库..."
+# curl -s -X DELETE "http://127.0.0.1:${NODE1_PORT}/api/v3/configure/db/${DB_NAME}" > /dev/null 2>&1 || true
+# echo "删除节点2的数据库..."
+# curl -s -X DELETE "http://127.0.0.1:${NODE2_PORT}/api/v3/configure/db/${DB_NAME}" > /dev/null 2>&1 || true
+# echo "删除节点3的数据库..."
+# curl -s -X DELETE "http://127.0.0.1:${NODE3_PORT}/api/v3/configure/db/${DB_NAME}" > /dev/null 2>&1 || true
+# echo -e "${GREEN}✓ 旧数据库已删除${NC}"
+# echo ""
 
-sleep 1
+# sleep 1
 
 echo -e "${BLUE}Step 2: 创建新数据库${NC}"
 echo "在节点1创建数据库..."
@@ -63,7 +63,7 @@ TIMESTAMP=1704067200000000000  # 2024-01-01 00:00:00 UTC
 TOTAL_WRITTEN=0
 
 # 分批写入 CPU 数据，每个服务器一批
-for server_num in {1..100}; do
+for server_num in {1..10}; do
   server=$(printf "server%02d" $server_num)
 
   # 根据服务器编号分配区域
@@ -76,7 +76,7 @@ for server_num in {1..100}; do
   fi
 
   CPU_DATA=""
-  for point in {1..200}; do
+  for point in {1..2000}; do
     # 生成随机的 CPU 使用率和负载
     cpu_usage=$(awk -v seed=$RANDOM 'BEGIN{srand(seed); printf "%.2f", rand()*100}')
     cpu_load=$(awk -v seed=$RANDOM 'BEGIN{srand(seed); printf "%.2f", rand()*10}')
@@ -110,7 +110,7 @@ echo ""
 TOTAL_WRITTEN=0
 
 # 分批写入 MEM 数据，每个服务器一批
-for server_num in {1..100}; do
+for server_num in {1..10}; do
   server=$(printf "server%02d" $server_num)
 
   # 根据服务器编号分配区域
@@ -123,7 +123,7 @@ for server_num in {1..100}; do
   fi
 
   MEM_DATA=""
-  for point in {1..200}; do
+  for point in {1..2000}; do
     # 生成随机的内存使用情况
     total_mem=$((32 + (server_num % 4) * 32))  # 32, 64, 96, or 128 GB
     used_mem=$(awk -v seed=$RANDOM -v total=$total_mem 'BEGIN{srand(seed); printf "%.2f", total * (0.3 + rand()*0.5)}')

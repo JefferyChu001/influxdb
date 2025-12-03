@@ -6,11 +6,13 @@
 
 pub mod table_provider;
 pub mod scan_exec;
+pub mod multi_node_scan_exec;
 pub mod expr_converter;
 pub mod statistics;
 
 pub use table_provider::DistributedTableProvider;
 pub use scan_exec::RemoteTableScanExec;
+pub use multi_node_scan_exec::MultiNodeScanExec;
 pub use expr_converter::ExprToSqlConverter;
 pub use statistics::RemoteTableStatistics;
 

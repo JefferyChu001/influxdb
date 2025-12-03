@@ -1,10 +1,10 @@
-//! Test distributed JOIN query using DistributedTableProvider
+//! Test distributed JOIN query with sharded data across multiple nodes
 //!
-//! This example demonstrates the distributed query capabilities we just implemented.
-//! It will:
-//! 1. Create DistributedTableProvider for cpu (node1) and mem (node2)
-//! 2. Register them with DataFusion
-//! 3. Execute a JOIN query that automatically uses predicate pushdown
+//! This example demonstrates TRUE distributed query capabilities:
+//! 1. Create DistributedTableProvider for cpu (sharded across nodes 1,2,3)
+//! 2. Create DistributedTableProvider for mem (sharded across nodes 1,2,3)
+//! 3. Register them with DataFusion
+//! 4. Execute JOIN queries that fetch and merge data from all nodes
 
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::prelude::*;
@@ -52,26 +52,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Field::new("cached", DataType::Float64, true),     
     ]));
 
-    println!("Step 1: 创建分布式表提供者");
-    println!("  - cpu 表在节点1 (127.0.0.1:8181) - 6列");
-    println!("  - mem 表在节点2 (127.0.0.1:8182) - 7列");
+    println!("Step 1: 创建分布式表提供者（分片版本）");
+    println!("  - cpu 表分片在节点1,2,3 (127.0.0.1:8181/8182/8183) - 6列");
+    println!("  - mem 表分片在节点1,2,3 (127.0.0.1:8181/8182/8183) - 7列");
+    println!("  - 分片策略: 基于 host 哈希");
     println!();
 
-    // Create DistributedTableProvider for cpu table (on node1)
+    // Create DistributedTableProvider for cpu table (sharded across 3 nodes)
     let cpu_table = Arc::new(DistributedTableProvider::new(
         "cpu".to_string(),
         "testdb".to_string(),
         cpu_schema,
-        vec![NodeId::new(1)], // cpu data is on node1
+        vec![NodeId::new(1), NodeId::new(2), NodeId::new(3)], // cpu data is sharded
         rpc_client.clone(),
     ));
 
-    // Create DistributedTableProvider for mem table (on node2)
+    // Create DistributedTableProvider for mem table (sharded across 3 nodes)
     let mem_table = Arc::new(DistributedTableProvider::new(
         "mem".to_string(),
         "testdb".to_string(),
         mem_schema,
-        vec![NodeId::new(2)], // mem data is on node2
+        vec![NodeId::new(1), NodeId::new(2), NodeId::new(3)], // mem data is sharded
         rpc_client.clone(),
     ));
 
@@ -88,11 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ 表已注册到 DataFusion");
     println!();
 
-    // 获取表的总行数
-    println!("========================================");
     println!("数据统计");
-    println!("========================================");
-    println!();
 
     // 直接查询远程节点获取准确的行数
     let cpu_total = async {
@@ -129,8 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await
     .unwrap_or(0);
 
-    println!("📊 CPU 表总行数: {} 行", cpu_total);
-    println!("📊 MEM 表总行数: {} 行", mem_total);
+    println!("📊 CPU 表节点1行数: {} 行 (查询节点1)", cpu_total);
+    println!("📊 MEM 表节点1行数: {} 行 (查询节点1)", mem_total);
+    println!("📌 注意: 实际会查询所有3个节点并合并结果");
     println!();
 
 

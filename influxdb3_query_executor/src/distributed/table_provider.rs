@@ -4,6 +4,7 @@
 //! DataFusion's TableProvider trait to enable querying tables on remote nodes.
 
 use crate::distributed::scan_exec::RemoteTableScanExec;
+use crate::distributed::multi_node_scan_exec::MultiNodeScanExec;
 use crate::distributed::statistics::RemoteTableStatistics;
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
@@ -111,25 +112,43 @@ impl TableProvider for DistributedTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        // For now, query the first node
-        // TODO: Implement load balancing or data locality awareness
-        let node_id = self.remote_nodes.first().ok_or_else(|| {
-            DataFusionError::Plan(format!(
+        if self.remote_nodes.is_empty() {
+            return Err(DataFusionError::Plan(format!(
                 "No nodes available for table {}",
                 self.table_name
-            ))
-        })?;
+            )));
+        }
 
-        // Create the remote scan execution plan
-        // DataFusion has already optimized and pushed down:
-        // - projection (which columns we need)
-        // - filters (WHERE conditions)
-        // - limit (for early termination)
-        let scan = RemoteTableScanExec::new(
-            *node_id,
-            self.database.clone(),
+        // If only one node, use RemoteTableScanExec for simplicity
+        if self.remote_nodes.len() == 1 {
+            let node_id = self.remote_nodes[0];
+
+            // Create the remote scan execution plan
+            // DataFusion has already optimized and pushed down:
+            // - projection (which columns we need)
+            // - filters (WHERE conditions)
+            // - limit (for early termination)
+            let scan = RemoteTableScanExec::new(
+                node_id,
+                self.database.clone(),
+                self.table_name.clone(),
+                self.schema.clone(),
+                projection.cloned(),
+                filters.to_vec(),
+                limit,
+                self.rpc_client.clone(),
+            );
+
+            return Ok(Arc::new(scan));
+        }
+
+        // Multiple nodes: use MultiNodeScanExec to query all nodes in parallel
+        // and union the results
+        let scan = MultiNodeScanExec::new(
             self.table_name.clone(),
+            self.database.clone(),
             self.schema.clone(),
+            self.remote_nodes.clone(),
             projection.cloned(),
             filters.to_vec(),
             limit,
