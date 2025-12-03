@@ -1,0 +1,68 @@
+[package]
+name = "influxdb3_distributed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Arrow & DataFusion - 完整的 DataFusion 生态系统
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+datafusion = { workspace = true }
+datafusion-proto = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-optimizer = { workspace = true }
+datafusion-sql = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+prost = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+snafu = { workspace = true }
+thiserror = { workspace = true }
+
+# Utilities
+itertools = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }
+bytes = { workspace = true }
+
+# Logging (使用 InfluxDB Core 的 trace)
+tracing = "0.1"
+
+# InfluxDB internal crates
+influxdb3_id = { path = "../influxdb3_id" }
+influxdb3_catalog = { path = "../influxdb3_catalog" }
+influxdb3_wal = { path = "../influxdb3_wal" }
+influxdb3_write = { path = "../influxdb3_write" }
+
+# InfluxDB Core dependencies
+schema = { workspace = true }
+datafusion_util = { workspace = true }
+data_types = { workspace = true }
+
+# Object store
+object_store = { workspace = true }
+
+# gRPC
+tonic = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+

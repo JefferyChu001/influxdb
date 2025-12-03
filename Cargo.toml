@@ -7,6 +7,7 @@ members = [
     "influxdb3_catalog",
     "influxdb3_clap_blocks",
     "influxdb3_client",
+    "influxdb3_distributed",
     "influxdb3_id",
     "influxdb3_internal_api",
     "influxdb3_load_generator",
@@ -86,6 +87,12 @@ csv = "1.3.0"
 # See https://github.com/influxdata/arrow-datafusion/pull/73 for contents
 datafusion = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
 datafusion-proto = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
+datafusion-common = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
+datafusion-expr = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
+datafusion-physical-expr = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
+datafusion-optimizer = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
+datafusion-sql = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
+datafusion-physical-plan = { git = "https://github.com/influxdata/arrow-datafusion.git", rev = "a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc" }
 dashmap = "6.1.0"
 dotenvy = "0.15.7"
 flate2 = "1.0.27"

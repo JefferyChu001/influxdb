@@ -1977,6 +1977,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-proto"
+version = "49.0.2"
+source = "git+https://github.com/influxdata/arrow-datafusion.git?rev=a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc#a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc"
+dependencies = [
+ "arrow",
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-proto-common",
+ "object_store",
+ "prost 0.13.5",
+]
+
+[[package]]
+name = "datafusion-proto-common"
+version = "49.0.2"
+source = "git+https://github.com/influxdata/arrow-datafusion.git?rev=a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc#a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "prost 0.13.5",
+]
+
+[[package]]
 name = "datafusion-pruning"
 version = "49.0.2"
 source = "git+https://github.com/influxdata/arrow-datafusion.git?rev=a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc#a9cf9aca9ebf0d6c04e0861d2baebffa0ba77dbc"
@@ -3330,6 +3355,51 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "influxdb3_distributed"
+version = "3.7.0-nightly"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "arrow-schema",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "data_types",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-optimizer",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
+ "datafusion-proto",
+ "datafusion-sql",
+ "datafusion_util",
+ "futures",
+ "futures-util",
+ "influxdb3_catalog",
+ "influxdb3_id",
+ "influxdb3_wal",
+ "influxdb3_write",
+ "itertools 0.13.0",
+ "object_store",
+ "parking_lot",
+ "pretty_assertions",
+ "prost 0.12.6",
+ "rand 0.8.5",
+ "regex",
+ "schema",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic 0.12.3",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5336,6 +5406,16 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb1435c188b76130da55f17a466d252ff7b1418b2ad3e037d127b94e3411f29"
+dependencies = [
+ "bytes",
+ "prost-derive 0.12.6",
+]
+
+[[package]]
+name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
@@ -5375,6 +5455,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
+dependencies = [
+ "anyhow",
+ "itertools 0.12.1",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
