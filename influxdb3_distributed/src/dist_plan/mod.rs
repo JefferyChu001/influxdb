@@ -5,7 +5,11 @@
 //!
 //! Based on GreptimeDB's dist_plan module
 
+pub mod analyzer;
+pub mod merge_scan;
 pub mod planner;
 
-// Placeholder - will be implemented in Phase 2
+pub use analyzer::{DistPlannerAnalyzer, DistPlannerOptions};
+pub use merge_scan::{MergeScanExec, MergeScanLogicalPlan};
+pub use planner::{DistributedPlan, DistributedPlanner, RemotePlan};
 
