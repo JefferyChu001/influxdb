@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package influxdb3.distributed;
+
+// Distributed query execution service
+service QueryExecutionService {
+  // Execute a query plan on a remote node
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (stream QueryResult);
+  
+  // Get the status of a running query
+  rpc GetQueryStatus(QueryStatusRequest) returns (QueryStatusResponse);
+  
+  // Cancel a running query
+  rpc CancelQuery(CancelQueryRequest) returns (CancelQueryResponse);
+}
+
+// Request to execute a query on remote node
+message ExecuteQueryRequest {
+  // Unique query ID
+  string query_id = 1;
+  
+  // Serialized physical plan (using DataFusion proto)
+  bytes physical_plan = 2;
+  
+  // Regions to query on this node
+  repeated uint64 region_ids = 3;
+  
+  // Query context/session info
+  QueryContext context = 4;
+}
+
+// Query context information
+message QueryContext {
+  // Database name
+  string database = 1;
+  
+  // Query timeout in milliseconds
+  uint64 timeout_ms = 2;
+  
+  // Maximum rows to return
+  optional uint64 max_rows = 3;
+}
+
+// Result batch from query execution
+message QueryResult {
+  // Query ID
+  string query_id = 1;
+  
+  // Arrow RecordBatch in IPC format
+  bytes record_batch = 2;
+  
+  // Whether this is the final batch
+  bool is_final = 3;
+  
+  // Error if execution failed
+  optional string error = 4;
+  
+  // Execution statistics
+  ExecutionStats stats = 5;
+}
+
+// Execution statistics
+message ExecutionStats {
+  // Number of rows returned in this batch
+  uint64 num_rows = 1;
+  
+  // Execution time in microseconds
+  uint64 execution_time_us = 2;
+  
+  // Bytes processed
+  uint64 bytes_processed = 3;
+}
+
+// Request for query status
+message QueryStatusRequest {
+  string query_id = 1;
+}
+
+// Response with query status
+message QueryStatusResponse {
+  string query_id = 1;
+  QueryState state = 2;
+  optional string error = 3;
+  ExecutionStats stats = 4;
+}
+
+// Query execution state
+enum QueryState {
+  UNKNOWN = 0;
+  PENDING = 1;
+  RUNNING = 2;
+  COMPLETED = 3;
+  FAILED = 4;
+  CANCELLED = 5;
+}
+
+// Request to cancel a query
+message CancelQueryRequest {
+  string query_id = 1;
+}
+
+// Response from cancel request
+message CancelQueryResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+

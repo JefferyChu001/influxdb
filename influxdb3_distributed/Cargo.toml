@@ -8,6 +8,7 @@ license.workspace = true
 # Arrow & DataFusion - 完整的 DataFusion 生态系统
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-flight = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-common = { workspace = true }
@@ -19,6 +20,7 @@ datafusion-physical-plan = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 async-trait = { workspace = true }
@@ -27,6 +29,7 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 prost = { workspace = true }
+prost-types = "0.12"
 
 # Error handling
 anyhow = { workspace = true }
@@ -42,7 +45,7 @@ chrono = { workspace = true }
 rand = { workspace = true }
 bytes = { workspace = true }
 
-# Logging (使用 InfluxDB Core 的 trace)
+# Logging
 tracing = "0.1"
 
 # InfluxDB internal crates
@@ -61,6 +64,10 @@ object_store = { workspace = true }
 
 # gRPC
 tonic = { workspace = true }
+
+[build-dependencies]
+tonic-build = "0.12"
+prost-build = "0.12"
 
 [dev-dependencies]
 tempfile = { workspace = true }

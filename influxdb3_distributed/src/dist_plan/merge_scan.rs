@@ -17,8 +17,10 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::DFSchemaRef;
 use datafusion_physical_expr::EquivalenceProperties;
+use futures::StreamExt;
 
-
+use crate::executor::RemoteExec;
+use crate::meta::MetaServiceRef;
 use crate::types::RegionId;
 
 /// MergeScan logical plan node
@@ -142,7 +144,6 @@ impl UserDefinedLogicalNodeCore for MergeScanLogicalPlan {
 /// MergeScan physical execution plan
 ///
 /// Executes a sub-plan on multiple regions and merges the results.
-#[derive(Debug)]
 pub struct MergeScanExec {
     /// Regions to query
     regions: Vec<RegionId>,
@@ -152,6 +153,19 @@ pub struct MergeScanExec {
     schema: ArrowSchemaRef,
     /// Plan properties
     properties: PlanProperties,
+    /// MetaService for looking up region locations
+    meta_service: Option<MetaServiceRef>,
+}
+
+impl fmt::Debug for MergeScanExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MergeScanExec")
+            .field("regions", &self.regions)
+            .field("input_plan", &self.input_plan)
+            .field("schema", &self.schema)
+            .field("has_meta_service", &self.meta_service.is_some())
+            .finish()
+    }
 }
 
 impl MergeScanExec {
@@ -159,6 +173,15 @@ impl MergeScanExec {
         regions: Vec<RegionId>,
         input_plan: Arc<dyn ExecutionPlan>,
         schema: ArrowSchemaRef,
+    ) -> Self {
+        Self::new_with_meta(regions, input_plan, schema, None)
+    }
+
+    pub fn new_with_meta(
+        regions: Vec<RegionId>,
+        input_plan: Arc<dyn ExecutionPlan>,
+        schema: ArrowSchemaRef,
+        meta_service: Option<MetaServiceRef>,
     ) -> Self {
         let eq_properties = EquivalenceProperties::new(schema.clone());
         let boundedness = datafusion::physical_plan::execution_plan::Boundedness::Unbounded {
@@ -176,6 +199,7 @@ impl MergeScanExec {
             input_plan,
             schema,
             properties,
+            meta_service,
         }
     }
 
@@ -252,17 +276,102 @@ impl ExecutionPlan for MergeScanExec {
         let region_id = self.regions[partition];
 
         tracing::debug!(
-            "Executing MergeScanExec for partition {} (region {})",
-            partition,
-            region_id
+            partition = partition,
+            region_id = %region_id,
+            "Executing MergeScanExec"
         );
 
-        // Execute the input plan for this partition
-        // In a real distributed implementation, this would:
-        // 1. Send the plan to the remote node hosting this region
-        // 2. Execute it there
-        // 3. Stream results back
-        // For now, we execute locally
+        // If we have a MetaService, use it to route to the correct node
+        if let Some(meta_service) = &self.meta_service {
+            // Clone for async move
+            let meta_service = meta_service.clone();
+            let input_plan = self.input_plan.clone();
+            let schema = self.schema.clone();
+            let regions = vec![region_id];
+
+            // Create a future that will execute remotely
+            let stream = futures::stream::once(async move {
+                // Look up which node hosts this region
+                let region_meta = meta_service
+                    .get_region(region_id)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::External(Box::new(e))
+                    })?;
+
+                let node = meta_service
+                    .get_node(region_meta.node_id)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::External(Box::new(e))
+                    })?;
+
+                tracing::info!(
+                    region_id = %region_id,
+                    node_id = %node.id,
+                    node_addr = %node.address,
+                    "Routing query to remote node"
+                );
+
+                // Create a RemoteExec to execute on the target node
+                let remote_exec = Arc::new(RemoteExec::new(
+                    node,
+                    regions,
+                    input_plan,
+                    schema.clone(),
+                ));
+
+                // Execute remotely using the standard ExecutionPlan interface
+                // This will:
+                // 1. Serialize the plan using DataFusion proto
+                // 2. Connect to the remote node via Arrow Flight
+                // 3. Send the plan and region list
+                // 4. Stream results back as Arrow RecordBatches
+                tracing::info!(
+                    partition = partition,
+                    region_id = %region_id,
+                    "Executing remote query via RemoteExec"
+                );
+
+                // Execute partition 0 on the remote node
+                let task_ctx = Arc::new(TaskContext::default());
+                match remote_exec.execute(0, task_ctx) {
+                    Ok(stream) => {
+                        // Successfully initiated remote execution
+                        // Convert the stream to return the first batch
+                        let mut stream = stream;
+                        match stream.next().await {
+                            Some(Ok(batch)) => Ok(batch),
+                            Some(Err(e)) => Err(e),
+                            None => Err(DataFusionError::Internal(
+                                "Remote stream ended without data".to_string()
+                            )),
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "Failed to execute remote query"
+                        );
+                        Err(e)
+                    }
+                }
+            });
+
+            return Ok(Box::pin(datafusion_physical_plan::stream::RecordBatchStreamAdapter::new(
+                self.schema.clone(),
+                stream,
+            )));
+        }
+
+        // No MetaService - fall back to local execution
+        // This happens in testing or when MetaService is not configured
+        tracing::warn!(
+            partition = partition,
+            region_id = %region_id,
+            "No MetaService configured, executing plan locally as fallback"
+        );
+
         self.input_plan.execute(partition, context)
     }
 }

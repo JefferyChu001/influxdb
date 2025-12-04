@@ -135,6 +135,14 @@ impl Error {
         }
         .build()
     }
+
+    /// Create a new remote query error
+    pub fn remote_query(reason: impl Into<String>) -> Self {
+        RemoteQuerySnafu {
+            reason: reason.into(),
+        }
+        .build()
+    }
 }
 
 // Implement conversion to DataFusion error

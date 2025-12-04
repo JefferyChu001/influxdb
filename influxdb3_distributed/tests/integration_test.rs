@@ -2,9 +2,7 @@
 //!
 //! These tests demonstrate the complete flow from logical plan to distributed execution.
 
-use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{col, lit, LogicalPlanBuilder};
