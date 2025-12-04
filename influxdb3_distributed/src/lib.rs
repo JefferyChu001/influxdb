@@ -67,7 +67,6 @@ pub mod optimizer;
 
 // Query execution
 pub mod executor;
-pub mod query_engine;
 
 // Region-level queries
 pub mod region_query;
