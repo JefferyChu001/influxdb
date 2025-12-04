@@ -8,7 +8,7 @@ use crate::distributed::multi_node_scan_exec::MultiNodeScanExec;
 use crate::distributed::statistics::RemoteTableStatistics;
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
-use datafusion::common::{Constraints, DataFusionError, Result as DataFusionResult, Statistics};
+use datafusion::common::{Constraints, DataFusionError, Result as DataFusionResult};
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;

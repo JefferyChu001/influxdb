@@ -13,9 +13,11 @@
 
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::prelude::*;
+use datafusion::execution::context::TaskContext;
+use datafusion::physical_plan::collect;
 use influxdb3_cluster::rpc::client::ClusterRpcClient;
 use influxdb3_cluster::types::NodeId;
-use influxdb3_query_executor::distributed::DistributedTableProvider;
+use influxdb3_query_executor::distributed::{DistributedTableProvider, DistributedJoinOptimizer};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -212,22 +214,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ORDER BY avg_cpu DESC
         LIMIT 10
     "#;
-    match ctx.sql(query7).await {
+
+    println!("--- 未优化版本 ---");
+    let unoptimized_time = match ctx.sql(query7).await {
         Ok(df) => {
             let start = std::time::Instant::now();
             match df.collect().await {
                 Ok(batches) => {
                     let elapsed = start.elapsed();
-                    println!("✓ 查询成功! 耗时: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
-                    println!("说明：从所有节点获取 CPU 和 MEM 数据，在协调节点进行 JOIN 和聚合");
+                    println!("✓ 未优化查询成功! 耗时: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
+                    println!("  结果行数: {}", batches.iter().map(|b| b.num_rows()).sum::<usize>());
                     arrow::util::pretty::print_batches(&batches)?;
                     println!();
+                    elapsed
                 }
-                Err(e) => println!("✗ 查询失败: {}", e),
+                Err(e) => {
+                    println!("✗ 查询失败: {}", e);
+                    std::time::Duration::from_secs(0)
+                }
             }
         }
-        Err(e) => println!("✗ 规划失败: {}", e),
-    }
+        Err(e) => {
+            println!("✗ 规划失败: {}", e);
+            std::time::Duration::from_secs(0)
+        }
+    };
+
+    println!("--- Hash Join 优化版本 ---");
+    let optimized_time = match ctx.sql(query7).await {
+        Ok(df) => {
+            // 获取物理计划
+            let physical_plan = df.create_physical_plan().await?;
+
+            // 应用 Hash Join 优化
+            let optimizer = DistributedJoinOptimizer::new()
+                .with_broadcast_threshold(50 * 1024); // 50MB
+
+            let optimized_plan = optimizer.optimize(physical_plan.clone())?;
+
+
+            // 执行优化后的计划
+            let start = std::time::Instant::now();
+            let task_ctx = Arc::new(TaskContext::default());
+
+            match collect(optimized_plan, task_ctx).await {
+                Ok(batches) => {
+                    let elapsed = start.elapsed();
+                    println!("✓ 优化查询成功! 耗时: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
+                    println!("  结果行数: {}", batches.iter().map(|b| b.num_rows()).sum::<usize>());
+                    arrow::util::pretty::print_batches(&batches)?;
+                    println!();
+                    elapsed
+                }
+                Err(e) => {
+                    println!("✗ 优化查询失败: {}", e);
+                    std::time::Duration::from_secs(0)
+                }
+            }
+        }
+        Err(e) => {
+            println!("✗ 规划失败: {}", e);
+            std::time::Duration::from_secs(0)
+        }
+    };
+
 
     Ok(())
 }
