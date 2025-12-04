@@ -96,30 +96,15 @@ impl DistributedQueryEngine {
     /// This method takes a logical plan and executes it in a distributed manner.
     pub async fn execute_logical_plan(
         &self,
-        mut logical_plan: LogicalPlan,
+        logical_plan: LogicalPlan,
     ) -> Result<SendableRecordBatchStream> {
         tracing::debug!(
             plan = ?logical_plan,
             "Executing logical plan"
         );
 
-        // Apply distributed analysis
-        let state = self.session_ctx.state();
-        let config = state.config_options();
-        logical_plan = self
-            .dist_analyzer
-            .analyze(logical_plan, &config)
-            .map_err(|e| {
-                InternalSnafu {
-                    reason: format!("Failed to analyze plan: {}", e),
-                }
-                .build()
-            })?;
-
-        tracing::debug!(
-            analyzed_plan = ?logical_plan,
-            "Applied distributed analysis"
-        );
+        // Skip distributed analysis - go directly to distributed planning
+        // The DistPlannerAnalyzer is for optimization, not for basic execution
 
         // Generate distributed physical plan
         let dist_plan = self.dist_planner.plan(&logical_plan).await?;

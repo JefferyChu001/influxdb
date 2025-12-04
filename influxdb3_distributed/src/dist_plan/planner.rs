@@ -136,6 +136,18 @@ impl DistributedPlanner {
                     tables.push(table_name);
                 }
             }
+            LogicalPlan::Extension(extension) => {
+                // Check if this is a MergeScan node
+                if let Some(merge_scan) = extension.node.as_any().downcast_ref::<MergeScanLogicalPlan>() {
+                    // Extract tables from the input plan
+                    self.extract_tables_recursive(merge_scan.input(), tables)?;
+                } else {
+                    // For other extensions, recurse into inputs
+                    for input in plan.inputs() {
+                        self.extract_tables_recursive(input, tables)?;
+                    }
+                }
+            }
             _ => {
                 // Recurse into children
                 for input in plan.inputs() {

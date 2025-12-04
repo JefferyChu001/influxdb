@@ -3148,6 +3148,7 @@ dependencies = [
  "influxdb3_catalog",
  "influxdb3_clap_blocks",
  "influxdb3_client",
+ "influxdb3_distributed",
  "influxdb3_process",
  "influxdb3_processing_engine",
  "influxdb3_query_executor",
