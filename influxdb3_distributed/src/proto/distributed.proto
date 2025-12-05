@@ -1,0 +1,512 @@
+// InfluxDB 3.0 Distributed Protocol Definitions
+//
+// This file defines the gRPC services and messages for communication
+// between Frontend, MetaServer, and Datanode components.
+
+syntax = "proto3";
+
+package influxdb3.distributed;
+
+option java_package = "com.influxdata.influxdb3.distributed";
+option java_multiple_files = true;
+
+// ============================================================================
+// Common Types
+// ============================================================================
+
+// Unique identifier for a node in the cluster
+message NodeId {
+    uint64 id = 1;
+}
+
+// Unique identifier for a region (data partition)
+message RegionId {
+    uint64 id = 1;
+}
+
+// Role of a node in the cluster
+enum NodeRole {
+    NODE_ROLE_UNSPECIFIED = 0;
+    NODE_ROLE_FRONTEND = 1;
+    NODE_ROLE_DATANODE = 2;
+    NODE_ROLE_METASERVER = 3;
+}
+
+// Status of a node
+enum NodeStatus {
+    NODE_STATUS_UNSPECIFIED = 0;
+    NODE_STATUS_STARTING = 1;
+    NODE_STATUS_ONLINE = 2;
+    NODE_STATUS_OFFLINE = 3;
+    NODE_STATUS_MAINTENANCE = 4;
+    NODE_STATUS_DRAINING = 5;
+}
+
+// Status of a region
+enum RegionStatus {
+    REGION_STATUS_UNSPECIFIED = 0;
+    REGION_STATUS_ACTIVE = 1;
+    REGION_STATUS_READONLY = 2;
+    REGION_STATUS_MIGRATING = 3;
+    REGION_STATUS_OFFLINE = 4;
+    REGION_STATUS_CREATING = 5;
+    REGION_STATUS_DELETING = 6;
+}
+
+// Information about a node
+message NodeInfo {
+    NodeId node_id = 1;
+    string grpc_addr = 2;
+    optional string http_addr = 3;
+    NodeRole node_role = 4;
+    NodeStatus status = 5;
+    repeated RegionId regions = 6;
+    int64 last_heartbeat_ms = 7;
+}
+
+// Partition range for a region
+message PartitionRange {
+    optional int64 time_start_ns = 1;
+    optional int64 time_end_ns = 2;
+    uint32 hash_start = 3;  // 0-65535
+    uint32 hash_end = 4;    // 0-65536 (exclusive)
+}
+
+// Complete information about a region
+message RegionInfo {
+    RegionId region_id = 1;
+    string database = 2;
+    string table = 3;
+    NodeId node_id = 4;
+    PartitionRange partition_range = 5;
+    RegionStatus status = 6;
+    uint64 epoch = 7;
+}
+
+// Node resource metrics
+message NodeMetrics {
+    float cpu_usage = 1;        // 0-100
+    float memory_usage = 2;     // 0-100
+    float disk_usage = 3;       // 0-100
+    uint32 active_connections = 4;
+    double queries_per_second = 5;
+    uint64 total_regions = 6;
+    uint64 total_rows = 7;
+}
+
+// Write precision
+enum WritePrecision {
+    WRITE_PRECISION_UNSPECIFIED = 0;
+    WRITE_PRECISION_NANOSECONDS = 1;
+    WRITE_PRECISION_MICROSECONDS = 2;
+    WRITE_PRECISION_MILLISECONDS = 3;
+    WRITE_PRECISION_SECONDS = 4;
+}
+
+// ============================================================================
+// MetaServer Service
+// ============================================================================
+
+service MetaService {
+    // Node management
+    rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+    rpc DeregisterNode(DeregisterNodeRequest) returns (DeregisterNodeResponse);
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
+    rpc GetAllNodes(GetAllNodesRequest) returns (GetAllNodesResponse);
+    rpc UpdateNodeStatus(UpdateNodeStatusRequest) returns (UpdateNodeStatusResponse);
+    
+    // Region management
+    rpc GetTableRegions(GetTableRegionsRequest) returns (GetTableRegionsResponse);
+    rpc GetDatabaseRegions(GetDatabaseRegionsRequest) returns (GetDatabaseRegionsResponse);
+    rpc GetRegion(GetRegionRequest) returns (GetRegionResponse);
+    rpc AssignRegion(AssignRegionRequest) returns (AssignRegionResponse);
+    rpc CreateTableRegions(CreateTableRegionsRequest) returns (CreateTableRegionsResponse);
+    
+    // Cluster information
+    rpc GetClusterInfo(GetClusterInfoRequest) returns (GetClusterInfoResponse);
+    
+    // Table location
+    rpc GetTableLocation(GetTableLocationRequest) returns (GetTableLocationResponse);
+}
+
+// ----- Node Management Messages -----
+
+message RegisterNodeRequest {
+    NodeInfo node_info = 1;
+}
+
+message RegisterNodeResponse {
+    bool success = 1;
+    NodeId assigned_node_id = 2;
+    repeated RegionInfo assigned_regions = 3;
+    optional string error_message = 4;
+}
+
+message DeregisterNodeRequest {
+    NodeId node_id = 1;
+}
+
+message DeregisterNodeResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message HeartbeatRequest {
+    NodeId node_id = 1;
+    NodeStatus status = 2;
+    repeated RegionId regions = 3;
+    optional NodeMetrics metrics = 4;
+}
+
+message HeartbeatResponse {
+    bool success = 1;
+    repeated RegionInfo regions_to_add = 2;
+    repeated RegionId regions_to_remove = 3;
+    optional string message = 4;
+}
+
+message GetNodeRequest {
+    NodeId node_id = 1;
+}
+
+message GetNodeResponse {
+    optional NodeInfo node_info = 1;
+}
+
+message GetAllNodesRequest {
+    optional NodeRole filter_role = 1;
+    optional NodeStatus filter_status = 2;
+}
+
+message GetAllNodesResponse {
+    repeated NodeInfo nodes = 1;
+}
+
+message UpdateNodeStatusRequest {
+    NodeId node_id = 1;
+    NodeStatus new_status = 2;
+}
+
+message UpdateNodeStatusResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+// ----- Region Management Messages -----
+
+message GetTableRegionsRequest {
+    string database = 1;
+    string table = 2;
+}
+
+message GetTableRegionsResponse {
+    repeated RegionInfo regions = 1;
+}
+
+message GetDatabaseRegionsRequest {
+    string database = 1;
+}
+
+message GetDatabaseRegionsResponse {
+    repeated RegionInfo regions = 1;
+}
+
+message GetRegionRequest {
+    RegionId region_id = 1;
+}
+
+message GetRegionResponse {
+    optional RegionInfo region = 1;
+}
+
+message AssignRegionRequest {
+    RegionId region_id = 1;
+    NodeId target_node_id = 2;
+}
+
+message AssignRegionResponse {
+    bool success = 1;
+    optional string error_message = 2;
+}
+
+message CreateTableRegionsRequest {
+    string database = 1;
+    string table = 2;
+    uint32 num_regions = 3;
+    repeated string partition_keys = 4;
+}
+
+message CreateTableRegionsResponse {
+    bool success = 1;
+    repeated RegionInfo created_regions = 2;
+    optional string error_message = 3;
+}
+
+// ----- Cluster Info Messages -----
+
+message GetClusterInfoRequest {
+    bool include_nodes = 1;
+    bool include_regions = 2;
+}
+
+enum ClusterHealth {
+    CLUSTER_HEALTH_UNSPECIFIED = 0;
+    CLUSTER_HEALTH_HEALTHY = 1;
+    CLUSTER_HEALTH_DEGRADED = 2;
+    CLUSTER_HEALTH_CRITICAL = 3;
+}
+
+message GetClusterInfoResponse {
+    string cluster_name = 1;
+    repeated NodeInfo nodes = 2;
+    uint64 total_regions = 3;
+    ClusterHealth health = 4;
+}
+
+// ----- Table Location Messages -----
+
+message GetTableLocationRequest {
+    string database = 1;
+    string table = 2;
+}
+
+message GetTableLocationResponse {
+    string database = 1;
+    string table = 2;
+    repeated RegionInfo regions = 3;
+}
+
+// ============================================================================
+// Datanode Service
+// ============================================================================
+
+service DatanodeService {
+    // Query execution
+    rpc ExecuteQuery(ExecuteQueryRequest) returns (stream QueryResultBatch);
+    rpc ExecutePlan(ExecutePlanRequest) returns (stream QueryResultBatch);
+    
+    // Write operations
+    rpc Write(WriteRequest) returns (WriteResponse);
+    rpc BatchWrite(stream WriteRequest) returns (WriteResponse);
+    
+    // Region management
+    rpc GetRegionStatus(GetRegionStatusRequest) returns (GetRegionStatusResponse);
+    rpc GetManagedRegions(GetManagedRegionsRequest) returns (GetManagedRegionsResponse);
+    
+    // Health check
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ----- Query Messages -----
+
+// Query type enumeration
+enum QueryType {
+    QUERY_TYPE_UNSPECIFIED = 0;
+    QUERY_TYPE_SQL = 1;
+    QUERY_TYPE_INFLUXQL = 2;
+    QUERY_TYPE_PHYSICAL_PLAN = 3;
+}
+
+message ExecuteQueryRequest {
+    string database = 1;
+    string query = 2;
+    QueryType query_type = 3;
+    RegionId region_id = 4;
+    string query_id = 5;
+    map<string, string> params = 6;
+}
+
+message ExecutePlanRequest {
+    bytes plan_bytes = 1;  // Serialized physical plan
+    string database = 2;
+    RegionId region_id = 3;
+    string query_id = 4;
+}
+
+message QueryResultBatch {
+    bytes arrow_data = 1;   // Arrow IPC format
+    uint64 num_rows = 2;
+    bool is_last = 3;
+    optional string error_message = 4;
+}
+
+// ----- Write Messages -----
+
+message WriteRequest {
+    string database = 1;
+    RegionId region_id = 2;
+    bytes data = 3;              // Line protocol or Arrow IPC
+    WritePrecision precision = 4;
+    bool no_sync = 5;
+}
+
+message WriteResponse {
+    bool success = 1;
+    uint64 points_written = 2;
+    repeated WriteLineError line_errors = 3;
+    optional string error_message = 4;
+}
+
+message WriteLineError {
+    uint32 line_number = 1;
+    string original_line = 2;
+    string error_message = 3;
+}
+
+// ----- Region Status Messages -----
+
+message GetRegionStatusRequest {
+    RegionId region_id = 1;
+}
+
+message GetRegionStatusResponse {
+    RegionId region_id = 1;
+    RegionStatus status = 2;
+    uint64 row_count = 3;
+    uint64 size_bytes = 4;
+    optional int64 last_write_time = 5;
+    optional int64 oldest_data_time = 6;
+    optional int64 newest_data_time = 7;
+}
+
+message GetManagedRegionsRequest {
+    // Empty - returns all managed regions
+}
+
+message GetManagedRegionsResponse {
+    repeated RegionInfo regions = 1;
+}
+
+// ----- Health Check Messages -----
+
+message HealthCheckRequest {
+    // Empty
+}
+
+message HealthCheckResponse {
+    bool healthy = 1;
+    NodeStatus status = 2;
+    optional NodeMetrics metrics = 3;
+    optional string message = 4;
+}
+
+// ============================================================================
+// Query Plan Serialization (for distributed execution)
+// ============================================================================
+
+// Distributed query plan sent from Frontend to Datanodes
+message DistributedQueryPlan {
+    string query_id = 1;
+    string database = 2;
+    
+    // The query stages
+    repeated QueryStage stages = 3;
+    
+    // Table to region mappings
+    map<string, TableRegions> table_regions = 4;
+}
+
+message TableRegions {
+    repeated RegionInfo regions = 1;
+}
+
+message QueryStage {
+    uint32 stage_id = 1;
+    StageType stage_type = 2;
+    
+    oneof stage_data {
+        ScanStage scan = 10;
+        FilterStage filter = 11;
+        ProjectStage project = 12;
+        AggregateStage aggregate = 13;
+        JoinStage join = 14;
+        SortStage sort = 15;
+        LimitStage limit = 16;
+        MergeStage merge = 17;
+    }
+}
+
+enum StageType {
+    STAGE_TYPE_UNSPECIFIED = 0;
+    STAGE_TYPE_SCAN = 1;
+    STAGE_TYPE_FILTER = 2;
+    STAGE_TYPE_PROJECT = 3;
+    STAGE_TYPE_AGGREGATE = 4;
+    STAGE_TYPE_JOIN = 5;
+    STAGE_TYPE_SORT = 6;
+    STAGE_TYPE_LIMIT = 7;
+    STAGE_TYPE_MERGE = 8;
+}
+
+message ScanStage {
+    string table = 1;
+    repeated string columns = 2;
+    repeated RegionId target_regions = 3;
+}
+
+message FilterStage {
+    bytes predicate = 1;  // Serialized expression
+}
+
+message ProjectStage {
+    repeated string columns = 1;
+    repeated bytes expressions = 2;  // Serialized expressions
+}
+
+message AggregateStage {
+    repeated string group_by = 1;
+    repeated AggregateFunction aggregates = 2;
+}
+
+message AggregateFunction {
+    string function_name = 1;
+    repeated string arguments = 2;
+    optional string alias = 3;
+}
+
+message JoinStage {
+    JoinType join_type = 1;
+    repeated JoinCondition conditions = 2;
+}
+
+enum JoinType {
+    JOIN_TYPE_UNSPECIFIED = 0;
+    JOIN_TYPE_INNER = 1;
+    JOIN_TYPE_LEFT = 2;
+    JOIN_TYPE_RIGHT = 3;
+    JOIN_TYPE_FULL = 4;
+    JOIN_TYPE_CROSS = 5;
+}
+
+message JoinCondition {
+    string left_column = 1;
+    string right_column = 2;
+}
+
+message SortStage {
+    repeated SortColumn columns = 1;
+}
+
+message SortColumn {
+    string column = 1;
+    bool descending = 2;
+    bool nulls_first = 3;
+}
+
+message LimitStage {
+    uint64 limit = 1;
+    uint64 offset = 2;
+}
+
+message MergeStage {
+    uint32 input_stage_id = 1;
+    MergeType merge_type = 2;
+}
+
+enum MergeType {
+    MERGE_TYPE_UNSPECIFIED = 0;
+    MERGE_TYPE_UNION = 1;
+    MERGE_TYPE_INTERLEAVE = 2;
+    MERGE_TYPE_SORTED = 3;
+}

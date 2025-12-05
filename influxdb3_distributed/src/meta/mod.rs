@@ -7,11 +7,13 @@
 //! - Coordinating region assignments
 
 mod client;
+pub mod grpc_server;
 mod region_manager;
 mod server;
 mod service;
 
 pub use client::MetaClient;
+pub use grpc_server::{MetaGrpcServer, MetaGrpcService};
 pub use region_manager::RegionManager;
 pub use server::MetaServer;
 pub use service::MetaService;
@@ -32,11 +34,7 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait MetaServiceApi: Send + Sync + std::fmt::Debug {
     /// Get regions for a specific table.
-    async fn get_table_regions(
-        &self,
-        database: &str,
-        table: &str,
-    ) -> Result<Vec<RegionInfo>>;
+    async fn get_table_regions(&self, database: &str, table: &str) -> Result<Vec<RegionInfo>>;
 
     /// Get all regions for a database.
     async fn get_database_regions(&self, database: &str) -> Result<Vec<RegionInfo>>;

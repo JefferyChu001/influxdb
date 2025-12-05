@@ -3346,6 +3346,7 @@ dependencies = [
  "arrow-array",
  "arrow-flight",
  "arrow-schema",
+ "async-stream",
  "async-trait",
  "bytes",
  "dashmap",

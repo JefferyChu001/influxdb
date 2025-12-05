@@ -8,11 +8,19 @@
 
 mod coordinator;
 mod distributed_executor;
+pub mod merger;
+pub mod optimizer;
+pub mod plan_serde;
 mod planner;
 mod router;
 
 pub use coordinator::QueryCoordinator;
 pub use distributed_executor::DistributedQueryExecutor;
+pub use merger::{AggregateFunction, AggregateSpec, MergerConfig, ResultMerger, SortColumn};
+pub use optimizer::{
+    DistributedOptimizer, FinalOperation, OptimizedPlan, OptimizerConfig, RegionPlan,
+};
+pub use plan_serde::{ArrowIpcSerializer, ArrowStreamSerializer, PlanSerializer};
 pub use planner::DistributedPlanner;
 pub use router::WriteRouter;
 
@@ -26,11 +34,7 @@ use influxdb3_write::BufferedWriteRequest;
 #[async_trait]
 pub trait DistributedQueryApi: Send + Sync + std::fmt::Debug {
     /// Execute a distributed SQL query.
-    async fn query_sql(
-        &self,
-        database: &str,
-        query: &str,
-    ) -> Result<SendableRecordBatchStream>;
+    async fn query_sql(&self, database: &str, query: &str) -> Result<SendableRecordBatchStream>;
 
     /// Execute a distributed InfluxQL query.
     async fn query_influxql(

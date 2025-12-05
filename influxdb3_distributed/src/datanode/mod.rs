@@ -7,10 +7,16 @@
 
 mod client;
 mod executor;
+pub mod flight_service;
+pub mod grpc_server;
 mod server;
 
 pub use client::DatanodeClient;
 pub use executor::LocalExecutor;
+pub use flight_service::{
+    DatanodeFlightClient, DatanodeFlightService, FlightServiceConfig, QueryTicket, QueryType,
+};
+pub use grpc_server::{DatanodeGrpcServer, DatanodeGrpcService};
 pub use server::DatanodeServer;
 
 use crate::common::{NodeId, RegionId, RegionInfo};

@@ -25,6 +25,7 @@ datafusion_util.workspace = true
 
 # Async runtime
 async-trait.workspace = true
+async-stream = "0.3"
 futures.workspace = true
 futures-util.workspace = true
 tokio.workspace = true
