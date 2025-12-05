@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]));
 
     // 生成 1000 行数据
-    let num_rows = 1000;
+    let num_rows = 10000;
     let mut time_data = Vec::with_capacity(num_rows);
     let mut host_data = Vec::with_capacity(num_rows);
     let mut region_data = Vec::with_capacity(num_rows);

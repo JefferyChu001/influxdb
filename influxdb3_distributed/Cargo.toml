@@ -9,6 +9,7 @@ license.workspace = true
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-flight = { workspace = true }
+arrow-json = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-common = { workspace = true }
@@ -44,6 +45,7 @@ regex = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
 bytes = { workspace = true }
+reqwest = { version = "0.11", features = ["json"] }
 
 # Logging
 tracing = "0.1"

@@ -1,0 +1,31 @@
+2025-12-04T10:14:16.277553Z  INFO influxdb3_lib::commands::serve: InfluxDB 3 Core server starting node_id=node2 git_hash=c967de9a7cd322b3150a2005beb02d1e10186753 version=3.7.0-nightly uuid=34f1e363-d0e4-40a7-8681-f3eb3d8932e6 num_cpus=10
+2025-12-04T10:14:16.277881Z  INFO influxdb3_clap_blocks::object_store: Object Store db_dir="./node2" object_store_type="Directory"
+2025-12-04T10:14:16.284544Z  INFO influxdb3_lib::commands::serve: Creating shared query executor num_threads=10
+2025-12-04T10:14:16.300085Z  INFO influxdb3_catalog::object_store::versions::v2: catalog not found, creating a new one catalog_uuid=cb4ce3f1-3f02-4692-9a55-3ee894233581
+2025-12-04T10:14:16.304215Z  INFO influxdb3_catalog::object_store::versions::v2: persisted catalog checkpoint file sequence=0
+2025-12-04T10:14:16.304586Z  INFO influxdb3_catalog::catalog::versions::v2::update: create database name="_internal"
+2025-12-04T10:14:16.304850Z  INFO influxdb3_catalog::catalog::versions::v2: creating new database database_name="_internal"
+2025-12-04T10:14:16.308074Z  INFO influxdb3_catalog::object_store::versions::v2: persisted next catalog sequence put_result=PutResult { e_tag: Some("1cd9af6-6451d97605ff3-ed"), version: None } object_path=CatalogFilePath(Path { raw: "node2/catalog/v2/logs/00000000000000000001.catalog" })
+2025-12-04T10:14:16.313630Z  INFO influxdb3_catalog::catalog::versions::v2: created internal database
+2025-12-04T10:14:16.314476Z  INFO influxdb3_lib::commands::serve: catalog initialized catalog_uuid=cb4ce3f1-3f02-4692-9a55-3ee894233581
+2025-12-04T10:14:16.314880Z  INFO influxdb3_lib::commands::serve: Initializing table index cache node_id="node2" max_entries=Some(100) concurrency_limit=20
+2025-12-04T10:14:16.315183Z  INFO influxdb3_write::table_index_cache: creating table indices from split snapshots
+2025-12-04T10:14:16.315944Z  INFO influxdb3_write::table_index_cache: loading all snapshot object metas
+2025-12-04T10:14:16.319690Z  INFO influxdb3_write::table_index_cache: Starting table index cache synchronization from object store node_prefix=node2
+2025-12-04T10:14:16.320335Z  INFO influxdb3_write::table_index_cache: No table new table indices to be created. duration_ms=0 total_cached=0 indices_updated=0 cache_capacity=Some(100)
+2025-12-04T10:14:16.320525Z  INFO influxdb3_write::retention_period_handler: Starting retention period handler background task check_interval_seconds=1800
+2025-12-04T10:14:16.320899Z  INFO influxdb3_catalog::catalog::versions::v2::update: register node node_id="node2" core_count=10 mode=[Core] cli_params=Some("{\"node-id\":\"node2\",\"without-auth\":\"*******\",\"http-bind\":\"127.0.0.1:8182\",\"object-store\":\"file\",\"data-dir\":\"./node2\"}")
+2025-12-04T10:14:16.321039Z  INFO influxdb3_catalog::catalog::versions::v2::update: registering new node to the catalog node_id="node2" instance_id="268b93b3-4cdb-4ea0-98a9-807f532941d1"
+2025-12-04T10:14:16.321630Z  INFO influxdb3_catalog::object_store::versions::v2: persisted next catalog sequence put_result=PutResult { e_tag: Some("1cd9b03-6451d976094e2-1fb"), version: None } object_path=CatalogFilePath(Path { raw: "node2/catalog/v2/logs/00000000000000000002.catalog" })
+2025-12-04T10:14:16.324050Z  INFO influxdb3_lib::commands::serve: catalog initialized instance_id="268b93b3-4cdb-4ea0-98a9-807f532941d1"
+2025-12-04T10:14:16.324137Z  INFO influxdb3_catalog::catalog::versions::v2::update: set gen1 duration duration_ns=600000000000
+2025-12-04T10:14:16.324813Z  INFO influxdb3_catalog::object_store::versions::v2: persisted next catalog sequence put_result=PutResult { e_tag: Some("1cd9b0b-6451d9760a147-b2"), version: None } object_path=CatalogFilePath(Path { raw: "node2/catalog/v2/logs/00000000000000000003.catalog" })
+2025-12-04T10:14:16.325380Z  INFO influxdb3_wal::object_store: replaying WAL files
+2025-12-04T10:14:16.325673Z  INFO influxdb3_wal::object_store: completed replaying wal files time_taken=295.625µs
+2025-12-04T10:14:16.325899Z  INFO influxdb3_lib::commands::serve: setting up background mem check for query buffer
+2025-12-04T10:14:16.325973Z  INFO influxdb3_lib::commands::serve: setting up telemetry store
+2025-12-04T10:14:16.326030Z  INFO influxdb3_write::deleter: Started catalog hard deleter task. delete_grace_period=86400s
+2025-12-04T10:14:16.326463Z  WARN influxdb3_lib::commands::serve: server started without auth (`--without-auth` switch), all token creation and regeneration of admin token endpoints are disabled
+2025-12-04T10:14:16.331633Z  WARN executor: DedicatedExecutor dropped without calling shutdown()
+2025-12-04T10:14:16.331678Z  WARN executor: DedicatedExecutor dropped without waiting for worker termination
+Serve command failed: Failed to bind address

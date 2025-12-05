@@ -74,6 +74,9 @@ pub mod region_query;
 // Metadata management
 pub mod meta;
 
+// HTTP Table Provider for remote data access
+pub mod http_table_provider;
+
 // Re-exports
 pub use error::{Error, Result};
 pub use types::{NodeId, NodeStatus, PartitionId, RegionId, RegionStatus, SchemaRef, TableId};

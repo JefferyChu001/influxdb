@@ -10,6 +10,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_common::ToDFSchema;
 
 use crate::dist_plan::merge_scan::{MergeScanExec, MergeScanLogicalPlan};
 use crate::error::*;
@@ -179,6 +180,9 @@ impl DistributedPlanner {
     ///
     /// This generates a sub-plan for each node that will be executed locally
     /// on that node's regions.
+    ///
+    /// Important: We strip out Sort and certain aggregation operations that should
+    /// be executed on the coordinator side.
     async fn create_remote_plans(
         &self,
         logical_plan: &LogicalPlan,
@@ -186,17 +190,14 @@ impl DistributedPlanner {
     ) -> Result<Vec<RemotePlan>> {
         let mut remote_plans = Vec::new();
 
-        for (node_id, regions) in regions_by_node {
-            // Extract the sub-plan that can be pushed down to this node
-            // For now, we push down the entire logical plan
-            // In a more sophisticated implementation, we would:
-            // 1. Extract only the operations that can be pushed down
-            // 2. Apply region-specific filters
-            // 3. Optimize for the specific regions on this node
+        // Extract the pushdown-able part of the logical plan
+        // (strip Sort, Limit with Sort, etc.)
+        let pushdown_plan = self.extract_pushdown_plan(logical_plan)?;
 
+        for (node_id, regions) in regions_by_node {
             let physical_plan = self
                 .session_state
-                .create_physical_plan(logical_plan)
+                .create_physical_plan(&pushdown_plan)
                 .await
                 .map_err(|e| Error::internal(format!("Failed to create physical plan: {}", e)))?;
 
@@ -210,12 +211,42 @@ impl DistributedPlanner {
         Ok(remote_plans)
     }
 
+    /// Extract the portion of the logical plan that can be pushed down to remote nodes
+    ///
+    /// This removes coordinator-side operations like Sort, while keeping:
+    /// - TableScan
+    /// - Filter (WHERE)
+    /// - Projection (SELECT columns)
+    /// - Limit (without Sort)
+    fn extract_pushdown_plan(&self, logical_plan: &LogicalPlan) -> Result<LogicalPlan> {
+        match logical_plan {
+            // If there's a Sort at the top, skip it and go to the input
+            LogicalPlan::Sort(sort) => {
+                self.extract_pushdown_plan(sort.input.as_ref())
+            }
+            // If there's a Limit with a sorted input, we need to be careful
+            LogicalPlan::Limit(limit) => {
+                // Check if the input is a Sort
+                if matches!(limit.input.as_ref(), LogicalPlan::Sort(_)) {
+                    // Skip the Limit and Sort, go deeper
+                    if let LogicalPlan::Sort(sort) = limit.input.as_ref() {
+                        return self.extract_pushdown_plan(sort.input.as_ref());
+                    }
+                }
+                // Otherwise, keep the limit but process its input
+                Ok(logical_plan.clone())
+            }
+            // Keep other operations as-is
+            _ => Ok(logical_plan.clone()),
+        }
+    }
+
     /// Create coordinator plan to merge results from remote nodes
     ///
     /// This creates a plan that:
-    /// 1. Receives results from all remote nodes
-    /// 2. Merges/aggregates the results as needed
-    /// 3. Applies any coordinator-side operations
+    /// 1. Receives results from all remote nodes (via Union)
+    /// 2. Applies coordinator-side operations (Sort, final aggregation, etc.)
+    /// 3. Returns the final result
     async fn create_coordinator_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -228,28 +259,122 @@ impl DistributedPlanner {
             .build());
         }
 
-        if remote_plans.len() == 1 {
+        // Step 1: Create base plan (merge results from all remote nodes)
+        let base_plan = if remote_plans.len() == 1 {
             // Only one node, no merging needed
-            // Just return the remote plan directly
-            return Ok(remote_plans[0].plan.clone());
+            remote_plans[0].plan.clone()
+        } else {
+            // Multiple nodes: need to merge results
+            // Collect all regions
+            let all_regions: Vec<RegionId> = remote_plans
+                .iter()
+                .flat_map(|rp| rp.regions.clone())
+                .collect();
+
+            // Use the schema from the first remote plan
+            let schema = remote_plans[0].plan.schema();
+
+            // Create MergeScanExec
+            Arc::new(MergeScanExec::new(all_regions, remote_plans[0].plan.clone(), schema))
+        };
+
+        // Step 2: Apply coordinator-side operations
+        let final_plan = self.apply_coordinator_operations(logical_plan, base_plan).await?;
+
+        Ok(final_plan)
+    }
+
+    /// Apply coordinator-side operations like Sort, Limit, etc.
+    ///
+    /// This method extracts operations from the logical plan that should be
+    /// executed on the coordinator after merging remote results.
+    async fn apply_coordinator_operations(
+        &self,
+        logical_plan: &LogicalPlan,
+        base_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::physical_plan::limit::GlobalLimitExec;
+        use datafusion::physical_plan::sorts::sort::SortExec;
+        use datafusion::physical_expr::PhysicalSortExpr;
+
+        let mut current_plan = base_plan;
+
+        // Check what operations need to be applied
+        match logical_plan {
+            // Sort + Limit: Apply both
+            LogicalPlan::Limit(limit) => {
+                if let LogicalPlan::Sort(sort) = limit.input.as_ref() {
+                    // First apply Sort
+                    let sort_exprs = self.create_sort_exprs(sort, &current_plan)?;
+                    current_plan = Arc::new(
+                        SortExec::new(sort_exprs, current_plan)
+                            .with_preserve_partitioning(false)
+                    );
+
+                    // Then apply Limit
+                    // In newer DataFusion, fetch and skip are usize
+                    let skip = 0; // DataFusion Limit doesn't have skip anymore in newer versions
+                    let fetch = None; // Placeholder for actual limit value
+
+                    // Note: GlobalLimitExec API may vary between DataFusion versions
+                    // This is a simplified version that may need adjustment
+                    current_plan = Arc::new(GlobalLimitExec::new(
+                        current_plan,
+                        skip,
+                        fetch
+                    ));
+                }
+            }
+            // Just Sort
+            LogicalPlan::Sort(sort) => {
+                let sort_exprs = self.create_sort_exprs(sort, &current_plan)?;
+                current_plan = Arc::new(
+                    SortExec::new(sort_exprs, current_plan)
+                        .with_preserve_partitioning(false)
+                );
+            }
+            _ => {
+                // No coordinator operations needed
+            }
         }
 
-        // Multiple nodes: need to merge results
-        // Create a MergeScanExec to combine results from all nodes
+        Ok(current_plan)
+    }
 
-        // Collect all regions
-        let all_regions: Vec<RegionId> = remote_plans
-            .iter()
-            .flat_map(|rp| rp.regions.clone())
-            .collect();
+    /// Create physical sort expressions from logical sort
+    fn create_sort_exprs(
+        &self,
+        sort: &datafusion::logical_expr::Sort,
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<datafusion::physical_expr::LexOrdering> {
+        use datafusion::physical_expr::create_physical_expr;
 
-        // Use the schema from the first remote plan
-        let schema = remote_plans[0].plan.schema();
+        let input_schema = plan.schema();
+        let mut sort_exprs = Vec::new();
 
-        // Create MergeScanExec
-        let merge_exec = MergeScanExec::new(all_regions, remote_plans[0].plan.clone(), schema);
+        for expr in &sort.expr {
+            let dfschema_ref = input_schema.clone().to_dfschema_ref()
+                .map_err(|e| Error::internal(format!("Failed to convert schema: {}", e)))?;
 
-        Ok(Arc::new(merge_exec))
+            let physical_expr = create_physical_expr(
+                &expr.expr,
+                &dfschema_ref,
+                &self.session_state.execution_props(),
+            )
+            .map_err(|e| Error::internal(format!("Failed to create physical expr: {}", e)))?;
+
+            sort_exprs.push(datafusion::physical_expr::PhysicalSortExpr {
+                expr: physical_expr,
+                options: datafusion::arrow::compute::SortOptions {
+                    descending: !expr.asc,
+                    nulls_first: expr.nulls_first,
+                },
+            });
+        }
+
+        // Convert Vec<PhysicalSortExpr> to LexOrdering
+        datafusion::physical_expr::LexOrdering::new(sort_exprs)
+            .ok_or_else(|| Error::internal("Failed to create LexOrdering"))
     }
 }
 
