@@ -1,0 +1,76 @@
+[package]
+name = "influxdb3_distributed"
+description = "Distributed query and write framework for InfluxDB 3.0"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Internal crates
+influxdb3_catalog = { path = "../influxdb3_catalog" }
+influxdb3_id = { path = "../influxdb3_id" }
+influxdb3_internal_api = { path = "../influxdb3_internal_api" }
+influxdb3_query_executor = { path = "../influxdb3_query_executor" }
+influxdb3_types = { path = "../influxdb3_types" }
+influxdb3_write = { path = "../influxdb3_write" }
+
+# Arrow ecosystem
+arrow.workspace = true
+arrow-array.workspace = true
+arrow-flight.workspace = true
+arrow-schema.workspace = true
+datafusion.workspace = true
+datafusion_util.workspace = true
+
+# Async runtime
+async-trait.workspace = true
+futures.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+# gRPC and networking
+tonic.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+
+# Utilities
+dashmap.workspace = true
+hashbrown.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+twox-hash.workspace = true
+
+# Observability
+observability_deps.workspace = true
+trace.workspace = true
+trace_http.workspace = true
+
+# Query related
+iox_query.workspace = true
+iox_query_params.workspace = true
+influxdb_influxql_parser.workspace = true
+data_types.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+prost-build.workspace = true
+
+[dev-dependencies]
+test_helpers.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+# Override some workspace lints for this crate during development
+[lints.rust]
+missing_copy_implementations = "allow"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+future_not_send = "warn"
